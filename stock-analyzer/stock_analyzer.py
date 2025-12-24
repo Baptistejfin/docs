@@ -116,6 +116,131 @@ def monte_carlo_simulation(hist: pd.DataFrame, days_forward: int = 252, num_simu
     return price_paths, percentile_5, percentile_50, percentile_95, last_price
 
 
+def arima_forecast(hist: pd.DataFrame, days_forward: int = 30):
+    """Prévision ARIMA des rendements futurs."""
+    try:
+        from statsmodels.tsa.arima.model import ARIMA
+        returns = hist['Close'].pct_change().dropna()
+        last_price = hist['Close'].iloc[-1]
+
+        best_aic = np.inf
+        best_model = None
+        best_order = (1, 0, 1)
+
+        for p in range(0, 4):
+            for q in range(0, 4):
+                if p == 0 and q == 0:
+                    continue
+                try:
+                    model = ARIMA(returns, order=(p, 0, q))
+                    fitted = model.fit()
+                    if fitted.aic < best_aic:
+                        best_aic = fitted.aic
+                        best_model = fitted
+                        best_order = (p, 0, q)
+                except Exception:
+                    continue
+
+        if best_model is None:
+            return None, None, None, None, None
+
+        forecast_res = best_model.get_forecast(steps=days_forward)
+        forecast = forecast_res.predicted_mean
+        ci = forecast_res.conf_int()
+
+        prices = [last_price]
+        upper = [last_price]
+        lower = [last_price]
+
+        for i in range(days_forward):
+            r = forecast.iloc[i]
+            r_low = ci.iloc[i, 0]
+            r_high = ci.iloc[i, 1]
+
+            prices.append(prices[-1] * (1 + r))
+            upper.append(upper[-1] * (1 + r_high))
+            lower.append(lower[-1] * (1 + r_low))
+
+        return np.array(prices[1:]), np.array(upper[1:]), np.array(lower[1:]), best_order, best_aic
+
+    except Exception as e:
+        return None, None, None, None, None
+
+
+def garch_forecast(hist: pd.DataFrame, days_forward: int = 30):
+    """Prévision GARCH(1,1) de la volatilité."""
+    try:
+        from arch import arch_model
+        returns = hist['Close'].pct_change().dropna() * 100
+
+        model = arch_model(returns, vol='GARCH', p=1, q=1, mean='Zero', dist='normal')
+        fitted = model.fit(disp='off')
+
+        forecast = fitted.forecast(horizon=days_forward)
+        volatility = np.sqrt(forecast.variance.values[-1, :])
+
+        return volatility, fitted
+
+    except Exception as e:
+        return None, None
+
+
+def arima_garch_combined(hist: pd.DataFrame, days_forward: int = 30):
+    """Combinaison ARIMA + GARCH pour la prévision des prix."""
+    try:
+        from statsmodels.tsa.arima.model import ARIMA
+        from arch import arch_model
+
+        returns = hist['Close'].pct_change().dropna()
+        last_price = hist['Close'].iloc[-1]
+
+        best_aic = np.inf
+        best_model = None
+        best_order = (1, 0, 1)
+
+        for p in range(0, 4):
+            for q in range(0, 4):
+                if p == 0 and q == 0:
+                    continue
+                try:
+                    model = ARIMA(returns, order=(p, 0, q))
+                    fitted = model.fit()
+                    if fitted.aic < best_aic:
+                        best_aic = fitted.aic
+                        best_model = fitted
+                        best_order = (p, 0, q)
+                except Exception:
+                    continue
+
+        if best_model is None:
+            return None, None, None, None
+
+        arima_fc = best_model.forecast(steps=days_forward)
+
+        returns_pct = returns * 100
+        garch = arch_model(returns_pct, vol='GARCH', p=1, q=1, mean='Zero', dist='normal')
+        garch_fitted = garch.fit(disp='off')
+        garch_fc = garch_fitted.forecast(horizon=days_forward)
+        vol = np.sqrt(garch_fc.variance.values[-1, :]) / 100
+
+        prices = [last_price]
+        upper = [last_price]
+        lower = [last_price]
+
+        for i in range(days_forward):
+            mu = arima_fc.iloc[i]
+            sigma = vol[i]
+
+            prices.append(prices[-1] * (1 + mu))
+            upper.append(prices[-1] * (1 + 1.96 * sigma))
+            lower.append(prices[-1] * (1 - 1.96 * sigma))
+
+        return np.array(prices[1:]), np.array(upper[1:]), np.array(lower[1:]), best_order
+
+    except Exception as e:
+        return None, None, None, None
+
+
 def get_fundamental_metrics(info, balance_sheet, cashflow):
     """Extrait les métriques fondamentales avancées."""
     metrics = {}
@@ -218,11 +343,20 @@ with st.sidebar:
 
     st.markdown("---")
 
-    # Options Monte Carlo (seulement en mode simple)
+    # Options de prévision (seulement en mode simple)
     if analysis_mode == 'Analyse simple':
-        st.subheader("🎲 Monte Carlo")
-        mc_simulations = st.slider("Nombre de simulations", 100, 5000, 1000, 100)
-        mc_days = st.slider("Jours à projeter", 30, 504, 252, 21)
+        st.subheader("🔮 Modèle de prévision")
+        model_choice = st.selectbox(
+            "Choisir le modèle",
+            options=['Monte Carlo', 'ARIMA', 'GARCH', 'ARIMA + GARCH'],
+            index=0
+        )
+
+        if model_choice == 'Monte Carlo':
+            mc_simulations = st.slider("Nombre de simulations", 100, 5000, 1000, 100)
+            mc_days = st.slider("Jours à projeter", 30, 504, 252, 21)
+        else:
+            forecast_days = st.slider("Jours de prévision", 5, 90, 30, 5)
 
     st.markdown("---")
     analyze_button = st.button("🔍 Analyser", type="primary", use_container_width=True)
@@ -593,64 +727,190 @@ if analyze_button and companies_to_analyze:
 
         st.plotly_chart(fig_price, use_container_width=True)
 
-        # ===== SIMULATION MONTE CARLO =====
+        # ===== MODÈLES DE PRÉVISION =====
         if len(hist) > 30:
             st.markdown("---")
-            st.subheader("🎲 Simulation Monte Carlo - Projection des Prix")
 
-            with st.spinner("Exécution de la simulation Monte Carlo..."):
-                simulations, p5, p50, p95, last_price = monte_carlo_simulation(
-                    hist, days_forward=mc_days, num_simulations=mc_simulations
-                )
+            if model_choice == 'Monte Carlo':
+                st.subheader("🎲 Simulation Monte Carlo - Projection des Prix")
 
-            last_date = hist.index[-1]
-            future_dates = pd.bdate_range(start=last_date, periods=mc_days + 1)[1:]
+                with st.spinner("Exécution de la simulation Monte Carlo..."):
+                    simulations, p5, p50, p95, last_price = monte_carlo_simulation(
+                        hist, days_forward=mc_days, num_simulations=mc_simulations
+                    )
 
-            fig_mc = go.Figure()
+                last_date = hist.index[-1]
+                future_dates = pd.bdate_range(start=last_date, periods=mc_days + 1)[1:]
 
-            sample_size = min(100, mc_simulations)
-            indices = np.linspace(0, mc_simulations - 1, sample_size, dtype=int)
-            for i in indices:
+                fig_mc = go.Figure()
+
+                sample_size = min(100, mc_simulations)
+                indices = np.linspace(0, mc_simulations - 1, sample_size, dtype=int)
+                for i in indices:
+                    fig_mc.add_trace(go.Scatter(
+                        x=future_dates, y=simulations[:, i], mode='lines',
+                        line=dict(width=0.3, color='rgba(150,150,150,0.3)'),
+                        showlegend=False, hoverinfo='skip'
+                    ))
+
                 fig_mc.add_trace(go.Scatter(
-                    x=future_dates, y=simulations[:, i], mode='lines',
-                    line=dict(width=0.3, color='rgba(150,150,150,0.3)'),
-                    showlegend=False, hoverinfo='skip'
+                    x=future_dates, y=p95, mode='lines', name='95e Percentile (Optimiste)',
+                    line=dict(color='rgba(0,255,0,0.7)', width=2, dash='dash')
+                ))
+                fig_mc.add_trace(go.Scatter(
+                    x=future_dates, y=p50, mode='lines', name='Médiane (50e)',
+                    line=dict(color='#FFD700', width=3)
+                ))
+                fig_mc.add_trace(go.Scatter(
+                    x=future_dates, y=p5, mode='lines', name='5e Percentile (Pessimiste)',
+                    line=dict(color='rgba(255,0,0,0.7)', width=2, dash='dash')
+                ))
+                fig_mc.add_trace(go.Scatter(
+                    x=[last_date], y=[last_price], mode='markers', name='Prix actuel',
+                    marker=dict(size=12, color='cyan', symbol='star')
                 ))
 
-            fig_mc.add_trace(go.Scatter(
-                x=future_dates, y=p95, mode='lines', name='95e Percentile (Optimiste)',
-                line=dict(color='rgba(0,255,0,0.7)', width=2, dash='dash')
-            ))
-            fig_mc.add_trace(go.Scatter(
-                x=future_dates, y=p50, mode='lines', name='Médiane (50e)',
-                line=dict(color='#FFD700', width=3)
-            ))
-            fig_mc.add_trace(go.Scatter(
-                x=future_dates, y=p5, mode='lines', name='5e Percentile (Pessimiste)',
-                line=dict(color='rgba(255,0,0,0.7)', width=2, dash='dash')
-            ))
-            fig_mc.add_trace(go.Scatter(
-                x=[last_date], y=[last_price], mode='markers', name='Prix actuel',
-                marker=dict(size=12, color='cyan', symbol='star')
-            ))
+                fig_mc.update_layout(
+                    title=f"Projection sur {mc_days} jours ({mc_simulations} scénarios)",
+                    template='plotly_dark', xaxis_title='Date',
+                    yaxis_title='Prix (USD)', hovermode='x unified', height=500
+                )
+                st.plotly_chart(fig_mc, use_container_width=True)
 
-            fig_mc.update_layout(
-                title=f"Projection sur {mc_days} jours ({mc_simulations} scénarios)",
-                template='plotly_dark', xaxis_title='Date',
-                yaxis_title='Prix (USD)', hovermode='x unified', height=500
-            )
-            st.plotly_chart(fig_mc, use_container_width=True)
+                col1, col2, col3 = st.columns(3)
+                with col1:
+                    st.metric("📊 Prix Médian Projeté", f"${p50[-1]:.2f}",
+                              delta=f"{((p50[-1]/last_price - 1)*100):.2f}%")
+                with col2:
+                    st.metric("🟢 Scénario Optimiste (95%)", f"${p95[-1]:.2f}",
+                              delta=f"{((p95[-1]/last_price - 1)*100):.2f}%")
+                with col3:
+                    st.metric("🔴 Scénario Pessimiste (5%)", f"${p5[-1]:.2f}",
+                              delta=f"{((p5[-1]/last_price - 1)*100):.2f}%")
 
-            col1, col2, col3 = st.columns(3)
-            with col1:
-                st.metric("📊 Prix Médian Projeté", f"${p50[-1]:.2f}",
-                          delta=f"{((p50[-1]/last_price - 1)*100):.2f}%")
-            with col2:
-                st.metric("🟢 Scénario Optimiste (95%)", f"${p95[-1]:.2f}",
-                          delta=f"{((p95[-1]/last_price - 1)*100):.2f}%")
-            with col3:
-                st.metric("🔴 Scénario Pessimiste (5%)", f"${p5[-1]:.2f}",
-                          delta=f"{((p5[-1]/last_price - 1)*100):.2f}%")
+            elif model_choice == 'ARIMA':
+                st.subheader("📉 Prévision ARIMA")
+                with st.spinner("Calcul du modèle ARIMA..."):
+                    prices_arima, upper, lower, best_order, aic = arima_forecast(hist, days_forward=forecast_days)
+
+                if prices_arima is not None:
+                    last_price = hist['Close'].iloc[-1]
+                    last_date = hist.index[-1]
+                    future_dates = pd.bdate_range(start=last_date, periods=forecast_days + 1)[1:]
+
+                    fig_arima = go.Figure()
+                    fig_arima.add_trace(go.Scatter(
+                        x=future_dates, y=upper, mode='lines',
+                        name='IC 95% Supérieur', line=dict(color='rgba(0,255,0,0.5)', dash='dash')
+                    ))
+                    fig_arima.add_trace(go.Scatter(
+                        x=future_dates, y=prices_arima, mode='lines',
+                        name='Prévision ARIMA', line=dict(color='#FFD700', width=3)
+                    ))
+                    fig_arima.add_trace(go.Scatter(
+                        x=future_dates, y=lower, mode='lines',
+                        name='IC 95% Inférieur', line=dict(color='rgba(255,0,0,0.5)', dash='dash')
+                    ))
+                    fig_arima.add_trace(go.Scatter(
+                        x=[last_date], y=[last_price], mode='markers', name='Prix actuel',
+                        marker=dict(size=12, color='cyan', symbol='star')
+                    ))
+                    fig_arima.update_layout(
+                        title=f"Prévision ARIMA{best_order} sur {forecast_days} jours (AIC: {aic:.2f})",
+                        template='plotly_dark', xaxis_title='Date',
+                        yaxis_title='Prix (USD)', hovermode='x unified', height=500
+                    )
+                    st.plotly_chart(fig_arima, use_container_width=True)
+
+                    col1, col2 = st.columns(2)
+                    with col1:
+                        st.metric("📊 Prix Prévu", f"${prices_arima[-1]:.2f}",
+                                  delta=f"{((prices_arima[-1]/last_price - 1)*100):.2f}%")
+                    with col2:
+                        st.info(f"Modèle optimal: ARIMA{best_order} | AIC: {aic:.2f}")
+                else:
+                    st.error("Impossible de calculer le modèle ARIMA. Essayez avec plus de données.")
+
+            elif model_choice == 'GARCH':
+                st.subheader("📊 Prévision de Volatilité GARCH")
+                with st.spinner("Calcul du modèle GARCH..."):
+                    volatility, fitted = garch_forecast(hist, days_forward=forecast_days)
+
+                if volatility is not None:
+                    last_date = hist.index[-1]
+                    future_dates = pd.bdate_range(start=last_date, periods=forecast_days + 1)[1:]
+
+                    fig_garch = go.Figure()
+                    fig_garch.add_trace(go.Scatter(
+                        x=future_dates, y=volatility, mode='lines+markers',
+                        name='Volatilité Prévue', line=dict(color='#FF6B6B', width=2)
+                    ))
+                    fig_garch.update_layout(
+                        title=f"Prévision de Volatilité GARCH(1,1) sur {forecast_days} jours",
+                        template='plotly_dark', xaxis_title='Date',
+                        yaxis_title='Volatilité (%)', hovermode='x unified', height=400
+                    )
+                    st.plotly_chart(fig_garch, use_container_width=True)
+
+                    col1, col2 = st.columns(2)
+                    with col1:
+                        st.metric("📊 Volatilité Moyenne", f"{np.mean(volatility):.2f}%")
+                    with col2:
+                        st.metric("📈 Volatilité Finale", f"{volatility[-1]:.2f}%")
+
+                    st.info("Le modèle GARCH prédit la volatilité future, pas le prix. Utile pour estimer le risque.")
+                else:
+                    st.error("Impossible de calculer le modèle GARCH. Installez le package 'arch': pip install arch")
+
+            elif model_choice == 'ARIMA + GARCH':
+                st.subheader("🔬 Prévision Combinée ARIMA + GARCH")
+                with st.spinner("Calcul du modèle combiné..."):
+                    prices_combined, upper, lower, best_order = arima_garch_combined(hist, days_forward=forecast_days)
+
+                if prices_combined is not None:
+                    last_price = hist['Close'].iloc[-1]
+                    last_date = hist.index[-1]
+                    future_dates = pd.bdate_range(start=last_date, periods=forecast_days + 1)[1:]
+
+                    fig_combined = go.Figure()
+                    fig_combined.add_trace(go.Scatter(
+                        x=future_dates, y=upper, mode='lines',
+                        name='Borne Supérieure (95%)', line=dict(color='rgba(0,255,0,0.5)', dash='dash')
+                    ))
+                    fig_combined.add_trace(go.Scatter(
+                        x=future_dates, y=lower, mode='lines',
+                        name='Borne Inférieure (95%)', line=dict(color='rgba(255,0,0,0.5)', dash='dash'),
+                        fill='tonexty', fillcolor='rgba(128,128,128,0.15)'
+                    ))
+                    fig_combined.add_trace(go.Scatter(
+                        x=future_dates, y=prices_combined, mode='lines',
+                        name='Prévision ARIMA+GARCH', line=dict(color='#FFD700', width=3)
+                    ))
+                    fig_combined.add_trace(go.Scatter(
+                        x=[last_date], y=[last_price], mode='markers', name='Prix actuel',
+                        marker=dict(size=12, color='cyan', symbol='star')
+                    ))
+                    fig_combined.update_layout(
+                        title=f"Prévision ARIMA{best_order} + GARCH(1,1) sur {forecast_days} jours",
+                        template='plotly_dark', xaxis_title='Date',
+                        yaxis_title='Prix (USD)', hovermode='x unified', height=500
+                    )
+                    st.plotly_chart(fig_combined, use_container_width=True)
+
+                    col1, col2, col3 = st.columns(3)
+                    with col1:
+                        st.metric("📊 Prix Prévu", f"${prices_combined[-1]:.2f}",
+                                  delta=f"{((prices_combined[-1]/last_price - 1)*100):.2f}%")
+                    with col2:
+                        st.metric("🟢 Borne Supérieure", f"${upper[-1]:.2f}",
+                                  delta=f"{((upper[-1]/last_price - 1)*100):.2f}%")
+                    with col3:
+                        st.metric("🔴 Borne Inférieure", f"${lower[-1]:.2f}",
+                                  delta=f"{((lower[-1]/last_price - 1)*100):.2f}%")
+
+                    st.success(f"ARIMA{best_order} prédit la tendance, GARCH(1,1) ajuste l'incertitude.")
+                else:
+                    st.error("Impossible de calculer le modèle. Installez les packages: pip install statsmodels arch")
 
         # ===== EBITDA VS REVENUE =====
         if financials is not None and not financials.empty:
