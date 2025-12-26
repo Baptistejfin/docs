@@ -329,6 +329,23 @@ with st.sidebar:
 
         companies_to_analyze = [c for c in [company_1, company_2, company_3, company_4] if c.strip()]
 
+        st.markdown("---")
+        st.subheader("📊 Indice de référence")
+        reference_index = st.selectbox(
+            "Comparer avec un indice",
+            options=['Aucun', 'S&P 500', 'NASDAQ', 'Dow Jones', 'CAC 40', 'DAX', 'FTSE 100'],
+            index=1
+        )
+
+        index_symbols = {
+            'S&P 500': '^GSPC',
+            'NASDAQ': '^IXIC',
+            'Dow Jones': '^DJI',
+            'CAC 40': '^FCHI',
+            'DAX': '^GDAXI',
+            'FTSE 100': '^FTSE'
+        }
+
     st.markdown("---")
 
     period = st.selectbox(
@@ -477,6 +494,109 @@ if analyze_button and companies_to_analyze:
                     f"${end_price:.2f}",
                     delta=f"{perf:.2f}%"
                 )
+
+        st.markdown("---")
+
+        # ===== HEATMAP DE CORRÉLATION =====
+        st.subheader("🔥 Matrice de Corrélation")
+
+        # Construire un DataFrame avec les rendements de chaque action
+        returns_df = pd.DataFrame()
+
+        for ticker in valid_tickers:
+            data = all_data[ticker]
+            hist = data['hist']
+            returns = hist['Close'].pct_change().dropna()
+            returns_df[data['name']] = returns
+
+        # Ajouter l'indice de référence si sélectionné
+        if reference_index != 'Aucun':
+            try:
+                index_symbol = index_symbols[reference_index]
+                index_data = yf.Ticker(index_symbol).history(period=period)
+                if not index_data.empty:
+                    index_returns = index_data['Close'].pct_change().dropna()
+                    # Aligner les dates
+                    common_dates = returns_df.index.intersection(index_returns.index)
+                    returns_df = returns_df.loc[common_dates]
+                    returns_df[reference_index] = index_returns.loc[common_dates]
+            except Exception:
+                st.warning(f"Impossible de charger l'indice {reference_index}")
+
+        # Calculer la matrice de corrélation
+        correlation_matrix = returns_df.corr()
+
+        # Créer la heatmap
+        fig_heatmap = go.Figure(data=go.Heatmap(
+            z=correlation_matrix.values,
+            x=correlation_matrix.columns,
+            y=correlation_matrix.columns,
+            colorscale='RdYlGn',
+            zmin=-1,
+            zmax=1,
+            text=np.round(correlation_matrix.values, 2),
+            texttemplate='%{text}',
+            textfont={"size": 14},
+            hoverongaps=False,
+            colorbar=dict(title='Corrélation')
+        ))
+
+        fig_heatmap.update_layout(
+            title='Corrélation des Rendements Journaliers',
+            template='plotly_dark',
+            height=450,
+            xaxis=dict(side='bottom'),
+            yaxis=dict(autorange='reversed')
+        )
+
+        st.plotly_chart(fig_heatmap, use_container_width=True)
+
+        # Interprétation
+        with st.expander("📖 Comment interpréter la corrélation ?"):
+            st.markdown("""
+            - **+1.00** : Corrélation parfaite positive (évoluent exactement ensemble)
+            - **+0.70 à +0.99** : Forte corrélation positive
+            - **+0.40 à +0.69** : Corrélation modérée positive
+            - **+0.10 à +0.39** : Faible corrélation positive
+            - **-0.10 à +0.10** : Pas de corrélation significative
+            - **-0.40 à -0.10** : Faible corrélation négative
+            - **-0.70 à -0.40** : Corrélation modérée négative
+            - **-1.00 à -0.70** : Forte corrélation négative
+
+            **Pour la diversification** : Choisissez des actions avec une faible corrélation entre elles pour réduire le risque global du portefeuille.
+            """)
+
+        # Afficher le Beta si un indice est sélectionné
+        if reference_index != 'Aucun' and reference_index in returns_df.columns:
+            st.markdown("---")
+            st.subheader(f"📈 Beta par rapport au {reference_index}")
+
+            beta_cols = st.columns(len(valid_tickers))
+            index_var = returns_df[reference_index].var()
+
+            for idx, ticker in enumerate(valid_tickers):
+                name = all_data[ticker]['name']
+                if name in returns_df.columns:
+                    cov = returns_df[name].cov(returns_df[reference_index])
+                    beta = cov / index_var if index_var != 0 else 0
+
+                    with beta_cols[idx]:
+                        if beta > 1:
+                            interpretation = "Plus volatile que le marché"
+                            delta_color = "normal"
+                        elif beta < 1:
+                            interpretation = "Moins volatile que le marché"
+                            delta_color = "inverse"
+                        else:
+                            interpretation = "Suit le marché"
+                            delta_color = "off"
+
+                        st.metric(
+                            f"{name}",
+                            f"β = {beta:.2f}",
+                            delta=interpretation,
+                            delta_color=delta_color
+                        )
 
         st.markdown("---")
 
