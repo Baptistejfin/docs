@@ -484,6 +484,15 @@ if analyze_button and companies_to_analyze:
 
         fig_compare = go.Figure()
 
+        # Charger l'indice de référence si sélectionné
+        index_hist = None
+        if reference_index != 'Aucun':
+            try:
+                index_symbol = index_symbols[reference_index]
+                index_hist = yf.Ticker(index_symbol).history(period=period)
+            except Exception:
+                st.warning(f"Impossible de charger l'indice {reference_index}")
+
         for ticker in valid_tickers:
             data = all_data[ticker]
             hist = data['hist']
@@ -496,6 +505,17 @@ if analyze_button and companies_to_analyze:
                 mode='lines',
                 name=f"{data['name']} ({ticker})",
                 line=dict(width=2)
+            ))
+
+        # Ajouter l'indice de référence au graphique
+        if index_hist is not None and not index_hist.empty:
+            index_normalized = (index_hist['Close'] / index_hist['Close'].iloc[0]) * 100
+            fig_compare.add_trace(go.Scatter(
+                x=index_hist.index,
+                y=index_normalized,
+                mode='lines',
+                name=f"{reference_index}",
+                line=dict(width=2, dash='dash', color='white')
             ))
 
         fig_compare.update_layout(
@@ -511,7 +531,10 @@ if analyze_button and companies_to_analyze:
         # Calcul des performances
         st.subheader("📊 Performance sur la Période")
 
-        perf_cols = st.columns(len(valid_tickers))
+        # Calculer le nombre de colonnes (entreprises + indice si sélectionné)
+        num_cols = len(valid_tickers) + (1 if index_hist is not None and not index_hist.empty else 0)
+        perf_cols = st.columns(num_cols)
+
         for idx, ticker in enumerate(valid_tickers):
             data = all_data[ticker]
             hist = data['hist']
@@ -524,6 +547,19 @@ if analyze_button and companies_to_analyze:
                     f"{data['name']}",
                     f"${end_price:.2f}",
                     delta=f"{perf:.2f}%"
+                )
+
+        # Ajouter la performance de l'indice de référence
+        if index_hist is not None and not index_hist.empty:
+            idx_start = index_hist['Close'].iloc[0]
+            idx_end = index_hist['Close'].iloc[-1]
+            idx_perf = ((idx_end - idx_start) / idx_start) * 100
+
+            with perf_cols[-1]:
+                st.metric(
+                    f"{reference_index}",
+                    f"{idx_end:.2f}",
+                    delta=f"{idx_perf:.2f}%"
                 )
 
         st.markdown("---")
@@ -695,32 +731,6 @@ if analyze_button and companies_to_analyze:
             change = info.get('regularMarketChangePercent')
             st.metric("📊 Variation jour", f"{change:.2f}%" if change else "N/A",
                       delta=f"{change:.2f}%" if change else None)
-
-        st.markdown("---")
-
-        # ===== PERFORMANCE SUR TOUTES LES PÉRIODES =====
-        st.subheader("📈 Performance sur Différentes Périodes")
-
-        with st.spinner("Calcul des performances..."):
-            period_returns = calculate_all_period_returns(ticker)
-
-        # Afficher les performances en colonnes
-        perf_cols = st.columns(7)
-        period_labels = ['YTD', '1 mois', '3 mois', '6 mois', '1 an', '2 ans', '5 ans']
-
-        for idx, label in enumerate(period_labels):
-            with perf_cols[idx]:
-                val = period_returns.get(label)
-                if val is not None:
-                    color = "normal" if val >= 0 else "inverse"
-                    st.metric(
-                        label,
-                        f"{val:+.2f}%",
-                        delta=f"{'↑' if val >= 0 else '↓'}",
-                        delta_color=color
-                    )
-                else:
-                    st.metric(label, "N/A")
 
         st.markdown("---")
 
@@ -903,6 +913,38 @@ if analyze_button and companies_to_analyze:
         )
 
         st.plotly_chart(fig_price, use_container_width=True)
+
+        # ===== PERFORMANCE DE LA PÉRIODE SÉLECTIONNÉE =====
+        st.subheader("📈 Performance sur la Période")
+
+        # Calculer la performance sur la période d'analyse complète
+        period_start_price = hist['Close'].iloc[0]
+        period_end_price = hist['Close'].iloc[-1]
+        period_change = period_end_price - period_start_price
+        period_change_pct = ((period_end_price - period_start_price) / period_start_price) * 100
+
+        # Afficher le nom de la période
+        period_names = {
+            'ytd': 'YTD (Depuis 1er janv.)', '6mo': '6 mois', '1y': '1 an', '2y': '2 ans',
+            '5y': '5 ans', '10y': '10 ans', 'max': 'Maximum'
+        }
+        period_display = period_names.get(period, period)
+
+        col_p1, col_p2, col_p3, col_p4 = st.columns(4)
+        with col_p1:
+            st.metric(f"📅 Période: {period_display}", f"${period_start_price:.2f}", delta="Prix début")
+        with col_p2:
+            st.metric("Prix actuel", f"${period_end_price:.2f}")
+        with col_p3:
+            color = "normal" if period_change_pct >= 0 else "inverse"
+            st.metric("Variation ($)", f"${period_change:+.2f}", delta=f"{period_change_pct:+.2f}%", delta_color=color)
+        with col_p4:
+            st.metric(
+                "Performance",
+                f"{period_change_pct:+.2f}%",
+                delta=f"{'↑ Hausse' if period_change_pct >= 0 else '↓ Baisse'}",
+                delta_color="normal" if period_change_pct >= 0 else "inverse"
+            )
 
         # ===== MODÈLES DE PRÉVISION =====
         if len(hist) > 30:
