@@ -426,11 +426,22 @@ with st.sidebar:
 
 # ============ ANALYSE PRINCIPALE ============
 
-if analyze_button and companies_to_analyze:
+# Initialiser le session_state pour conserver les données
+if 'all_data' not in st.session_state:
+    st.session_state.all_data = {}
+if 'valid_tickers' not in st.session_state:
+    st.session_state.valid_tickers = []
+if 'analysis_done' not in st.session_state:
+    st.session_state.analysis_done = False
+if 'current_period' not in st.session_state:
+    st.session_state.current_period = None
 
-    # Récupération des données pour toutes les entreprises
-    all_data = {}
-    valid_tickers = []
+# Lancer l'analyse si le bouton est cliqué
+if analyze_button and companies_to_analyze:
+    # Réinitialiser les données
+    st.session_state.all_data = {}
+    st.session_state.valid_tickers = []
+    st.session_state.current_period = period
 
     for company in companies_to_analyze:
         with st.spinner(f"Recherche de {company}..."):
@@ -441,7 +452,7 @@ if analyze_button and companies_to_analyze:
                 info, hist, financials, balance_sheet, cashflow, recommendations = get_stock_data(ticker_symbol, period)
 
             if info is not None and hist is not None and not hist.empty:
-                all_data[ticker_symbol] = {
+                st.session_state.all_data[ticker_symbol] = {
                     'name': info.get('shortName', ticker_symbol),
                     'info': info,
                     'hist': hist,
@@ -450,15 +461,23 @@ if analyze_button and companies_to_analyze:
                     'cashflow': cashflow,
                     'recommendations': recommendations
                 }
-                valid_tickers.append(ticker_symbol)
+                st.session_state.valid_tickers.append(ticker_symbol)
             else:
                 st.warning(f"⚠️ Données indisponibles pour {company}")
         else:
             st.warning(f"⚠️ Entreprise '{company}' non trouvée")
 
-    if not valid_tickers:
+    if not st.session_state.valid_tickers:
         st.error("Aucune entreprise valide trouvée.")
+        st.session_state.analysis_done = False
         st.stop()
+    else:
+        st.session_state.analysis_done = True
+
+# Afficher les résultats si l'analyse a été effectuée
+if st.session_state.analysis_done and st.session_state.valid_tickers:
+    all_data = st.session_state.all_data
+    valid_tickers = st.session_state.valid_tickers
 
     # ==================== MODE COMPARAISON ====================
     if analysis_mode == 'Comparaison' and len(valid_tickers) >= 2:
