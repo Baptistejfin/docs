@@ -49,9 +49,10 @@ def get_stock_data(ticker_symbol: str, period: str):
         tkr = yf.Ticker(ticker_symbol)
         info = tkr.info
 
-        # Pour YTD, utiliser la date exacte du 1er janvier de l'année en cours
+        # Pour YTD, utiliser le dernier jour de bourse de l'année précédente comme référence
         if period == 'ytd':
-            start_date = datetime(datetime.now().year, 1, 1)
+            # Commencer quelques jours avant le 1er janvier pour capturer le dernier cours de l'année précédente
+            start_date = datetime(datetime.now().year - 1, 12, 28)
             hist = tkr.history(start=start_date)
         else:
             hist = tkr.history(period=period)
@@ -323,9 +324,9 @@ def calculate_all_period_returns(ticker_symbol: str):
 
     for label, period_code in periods.items():
         try:
-            # Pour YTD, utiliser la date exacte du 1er janvier
+            # Pour YTD, utiliser le dernier jour de bourse de l'année précédente comme référence
             if period_code == 'ytd':
-                start_date = datetime(datetime.now().year, 1, 1)
+                start_date = datetime(datetime.now().year - 1, 12, 28)
                 hist = tkr.history(start=start_date)
             else:
                 hist = tkr.history(period=period_code)
@@ -502,9 +503,9 @@ if analyze_button and companies_to_analyze:
         if reference_index != 'Aucun':
             try:
                 index_symbol = index_symbols[reference_index]
-                # Pour YTD, utiliser la date exacte du 1er janvier
+                # Pour YTD, utiliser le dernier jour de bourse de l'année précédente comme référence
                 if period == 'ytd':
-                    start_date = datetime(datetime.now().year, 1, 1)
+                    start_date = datetime(datetime.now().year - 1, 12, 28)
                     index_hist = yf.Ticker(index_symbol).history(start=start_date)
                 else:
                     index_hist = yf.Ticker(index_symbol).history(period=period)
@@ -598,9 +599,9 @@ if analyze_button and companies_to_analyze:
         if reference_index != 'Aucun':
             try:
                 index_symbol = index_symbols[reference_index]
-                # Pour YTD, utiliser la date exacte du 1er janvier
+                # Pour YTD, utiliser le dernier jour de bourse de l'année précédente comme référence
                 if period == 'ytd':
-                    start_date = datetime(datetime.now().year, 1, 1)
+                    start_date = datetime(datetime.now().year - 1, 12, 28)
                     index_data = yf.Ticker(index_symbol).history(start=start_date)
                 else:
                     index_data = yf.Ticker(index_symbol).history(period=period)
