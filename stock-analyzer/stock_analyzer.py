@@ -48,7 +48,14 @@ def get_stock_data(ticker_symbol: str, period: str):
     try:
         tkr = yf.Ticker(ticker_symbol)
         info = tkr.info
-        hist = tkr.history(period=period)
+
+        # Pour YTD, utiliser la date exacte du 1er janvier de l'année en cours
+        if period == 'ytd':
+            start_date = datetime(datetime.now().year, 1, 1)
+            hist = tkr.history(start=start_date)
+        else:
+            hist = tkr.history(period=period)
+
         financials = tkr.financials
         balance_sheet = tkr.balance_sheet
         cashflow = tkr.cashflow
@@ -316,7 +323,13 @@ def calculate_all_period_returns(ticker_symbol: str):
 
     for label, period_code in periods.items():
         try:
-            hist = tkr.history(period=period_code)
+            # Pour YTD, utiliser la date exacte du 1er janvier
+            if period_code == 'ytd':
+                start_date = datetime(datetime.now().year, 1, 1)
+                hist = tkr.history(start=start_date)
+            else:
+                hist = tkr.history(period=period_code)
+
             if hist is not None and len(hist) >= 2:
                 start_price = hist['Close'].iloc[0]
                 end_price = hist['Close'].iloc[-1]
@@ -489,7 +502,12 @@ if analyze_button and companies_to_analyze:
         if reference_index != 'Aucun':
             try:
                 index_symbol = index_symbols[reference_index]
-                index_hist = yf.Ticker(index_symbol).history(period=period)
+                # Pour YTD, utiliser la date exacte du 1er janvier
+                if period == 'ytd':
+                    start_date = datetime(datetime.now().year, 1, 1)
+                    index_hist = yf.Ticker(index_symbol).history(start=start_date)
+                else:
+                    index_hist = yf.Ticker(index_symbol).history(period=period)
             except Exception:
                 st.warning(f"Impossible de charger l'indice {reference_index}")
 
@@ -580,7 +598,13 @@ if analyze_button and companies_to_analyze:
         if reference_index != 'Aucun':
             try:
                 index_symbol = index_symbols[reference_index]
-                index_data = yf.Ticker(index_symbol).history(period=period)
+                # Pour YTD, utiliser la date exacte du 1er janvier
+                if period == 'ytd':
+                    start_date = datetime(datetime.now().year, 1, 1)
+                    index_data = yf.Ticker(index_symbol).history(start=start_date)
+                else:
+                    index_data = yf.Ticker(index_symbol).history(period=period)
+
                 if not index_data.empty:
                     index_returns = index_data['Close'].pct_change().dropna()
                     # Aligner les dates
