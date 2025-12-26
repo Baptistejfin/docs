@@ -299,6 +299,37 @@ def calculate_period_change(hist, start_date, end_date):
         return None, None, None, None
 
 
+def calculate_all_period_returns(ticker_symbol: str):
+    """Calcule les rendements pour toutes les périodes standard."""
+    periods = {
+        'YTD': 'ytd',
+        '1 mois': '1mo',
+        '3 mois': '3mo',
+        '6 mois': '6mo',
+        '1 an': '1y',
+        '2 ans': '2y',
+        '5 ans': '5y'
+    }
+
+    results = {}
+    tkr = yf.Ticker(ticker_symbol)
+
+    for label, period_code in periods.items():
+        try:
+            hist = tkr.history(period=period_code)
+            if hist is not None and len(hist) >= 2:
+                start_price = hist['Close'].iloc[0]
+                end_price = hist['Close'].iloc[-1]
+                change_pct = ((end_price - start_price) / start_price) * 100
+                results[label] = change_pct
+            else:
+                results[label] = None
+        except:
+            results[label] = None
+
+    return results
+
+
 # ============ INTERFACE UTILISATEUR ============
 
 with st.sidebar:
@@ -350,10 +381,10 @@ with st.sidebar:
 
     period = st.selectbox(
         "Période d'analyse",
-        options=['6mo', '1y', '2y', '5y', '10y', 'max'],
-        index=1,
+        options=['ytd', '6mo', '1y', '2y', '5y', '10y', 'max'],
+        index=2,
         format_func=lambda x: {
-            '6mo': '6 mois', '1y': '1 an', '2y': '2 ans',
+            'ytd': 'YTD (Depuis 1er janv.)', '6mo': '6 mois', '1y': '1 an', '2y': '2 ans',
             '5y': '5 ans', '10y': '10 ans', 'max': 'Maximum'
         }.get(x, x)
     )
@@ -662,8 +693,34 @@ if analyze_button and companies_to_analyze:
             st.metric("🏦 Market Cap", format_value(info.get('marketCap'), 'USD'))
         with col4:
             change = info.get('regularMarketChangePercent')
-            st.metric("📊 Variation", f"{change:.2f}%" if change else "N/A",
+            st.metric("📊 Variation jour", f"{change:.2f}%" if change else "N/A",
                       delta=f"{change:.2f}%" if change else None)
+
+        st.markdown("---")
+
+        # ===== PERFORMANCE SUR TOUTES LES PÉRIODES =====
+        st.subheader("📈 Performance sur Différentes Périodes")
+
+        with st.spinner("Calcul des performances..."):
+            period_returns = calculate_all_period_returns(ticker)
+
+        # Afficher les performances en colonnes
+        perf_cols = st.columns(7)
+        period_labels = ['YTD', '1 mois', '3 mois', '6 mois', '1 an', '2 ans', '5 ans']
+
+        for idx, label in enumerate(period_labels):
+            with perf_cols[idx]:
+                val = period_returns.get(label)
+                if val is not None:
+                    color = "normal" if val >= 0 else "inverse"
+                    st.metric(
+                        label,
+                        f"{val:+.2f}%",
+                        delta=f"{'↑' if val >= 0 else '↓'}",
+                        delta_color=color
+                    )
+                else:
+                    st.metric(label, "N/A")
 
         st.markdown("---")
 
