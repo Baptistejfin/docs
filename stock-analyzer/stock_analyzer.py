@@ -468,6 +468,95 @@ def estimate_growth_rate(info, cashflow):
     return min(max(base_growth, 0), 30)
 
 
+def simulate_dca(hist: pd.DataFrame, investment_amount: float, frequency: str = 'monthly'):
+    """
+    Simule une stratégie DCA (Dollar Cost Averaging) sur les données historiques.
+
+    Args:
+        hist: DataFrame avec les données historiques (doit avoir une colonne 'Close')
+        investment_amount: Montant investi à chaque période
+        frequency: Fréquence d'investissement ('weekly', 'bi-weekly', 'monthly')
+
+    Returns:
+        dict avec les résultats de la simulation
+    """
+    # Définir la fréquence
+    if frequency == 'weekly':
+        freq_days = 7
+    elif frequency == 'bi-weekly':
+        freq_days = 14
+    else:  # monthly
+        freq_days = 30
+
+    # Initialiser les variables
+    total_invested = 0
+    total_shares = 0
+    investments = []
+
+    # Parcourir les données historiques
+    last_investment_date = None
+
+    for date, row in hist.iterrows():
+        price = row['Close']
+
+        # Vérifier si c'est le moment d'investir
+        should_invest = False
+        if last_investment_date is None:
+            should_invest = True
+        else:
+            days_since_last = (date - last_investment_date).days
+            if days_since_last >= freq_days:
+                should_invest = True
+
+        if should_invest:
+            shares_bought = investment_amount / price
+            total_shares += shares_bought
+            total_invested += investment_amount
+            last_investment_date = date
+
+            # Valeur du portefeuille à cette date
+            portfolio_value = total_shares * price
+
+            investments.append({
+                'date': date,
+                'price': price,
+                'shares_bought': shares_bought,
+                'total_shares': total_shares,
+                'total_invested': total_invested,
+                'portfolio_value': portfolio_value,
+                'cost_basis': total_invested / total_shares if total_shares > 0 else 0
+            })
+
+    # Calculer les résultats finaux
+    if len(investments) > 0 and len(hist) > 0:
+        final_price = hist['Close'].iloc[-1]
+        final_portfolio_value = total_shares * final_price
+        total_return = ((final_portfolio_value - total_invested) / total_invested) * 100 if total_invested > 0 else 0
+        avg_cost_basis = total_invested / total_shares if total_shares > 0 else 0
+
+        # Simulation Lump Sum (investir tout au début)
+        initial_price = hist['Close'].iloc[0]
+        lump_sum_shares = total_invested / initial_price
+        lump_sum_final_value = lump_sum_shares * final_price
+        lump_sum_return = ((lump_sum_final_value - total_invested) / total_invested) * 100 if total_invested > 0 else 0
+
+        return {
+            'investments': pd.DataFrame(investments),
+            'total_invested': total_invested,
+            'total_shares': total_shares,
+            'final_value': final_portfolio_value,
+            'total_return': total_return,
+            'avg_cost_basis': avg_cost_basis,
+            'num_investments': len(investments),
+            'final_price': final_price,
+            'lump_sum_value': lump_sum_final_value,
+            'lump_sum_return': lump_sum_return,
+            'dca_vs_lump': total_return - lump_sum_return
+        }
+
+    return None
+
+
 # ============ INTERFACE UTILISATEUR ============
 
 with st.sidebar:
@@ -1544,6 +1633,204 @@ if st.session_state.analysis_done and st.session_state.valid_tickers:
                     st.plotly_chart(fig_rec, use_container_width=True)
             except Exception:
                 pass
+
+        # ===== SIMULATEUR DCA =====
+        st.markdown("---")
+        st.subheader("📊 Simulateur DCA (Dollar Cost Averaging)")
+        st.markdown("Simulez une stratégie d'investissement programmé sur les données historiques.")
+
+        with st.expander("⚙️ Paramètres de la simulation DCA", expanded=True):
+            col_dca1, col_dca2, col_dca3 = st.columns(3)
+
+            with col_dca1:
+                dca_amount = st.number_input(
+                    "💵 Montant par investissement ($)",
+                    min_value=10.0,
+                    max_value=100000.0,
+                    value=500.0,
+                    step=50.0,
+                    help="Montant investi à chaque période",
+                    key="dca_amount"
+                )
+
+            with col_dca2:
+                dca_frequency = st.selectbox(
+                    "📅 Fréquence d'investissement",
+                    options=['monthly', 'bi-weekly', 'weekly'],
+                    index=0,
+                    format_func=lambda x: {
+                        'weekly': 'Hebdomadaire',
+                        'bi-weekly': 'Bi-mensuel',
+                        'monthly': 'Mensuel'
+                    }.get(x, x),
+                    help="À quelle fréquence investir",
+                    key="dca_frequency"
+                )
+
+            with col_dca3:
+                # Calculer la période en fonction des données disponibles
+                data_start = hist.index.min()
+                data_end = hist.index.max()
+                data_years = (data_end - data_start).days / 365
+
+                st.metric(
+                    "📆 Période analysée",
+                    f"{data_years:.1f} ans",
+                    delta=f"{data_start.strftime('%Y-%m-%d')} → {data_end.strftime('%Y-%m-%d')}"
+                )
+
+        # Lancer la simulation
+        if len(hist) > 30:  # Minimum de données requises
+            dca_result = simulate_dca(hist, dca_amount, dca_frequency)
+
+            if dca_result:
+                st.markdown("### 🎯 Résultats de la Simulation")
+
+                # Métriques principales
+                col_r1, col_r2, col_r3, col_r4 = st.columns(4)
+
+                with col_r1:
+                    st.metric(
+                        "💰 Total investi",
+                        f"${dca_result['total_invested']:,.0f}",
+                        delta=f"{dca_result['num_investments']} versements"
+                    )
+
+                with col_r2:
+                    st.metric(
+                        "📈 Valeur finale (DCA)",
+                        f"${dca_result['final_value']:,.0f}",
+                        delta=f"{dca_result['total_return']:+.1f}%",
+                        delta_color="normal" if dca_result['total_return'] >= 0 else "inverse"
+                    )
+
+                with col_r3:
+                    st.metric(
+                        "💵 Valeur finale (Lump Sum)",
+                        f"${dca_result['lump_sum_value']:,.0f}",
+                        delta=f"{dca_result['lump_sum_return']:+.1f}%",
+                        delta_color="normal" if dca_result['lump_sum_return'] >= 0 else "inverse"
+                    )
+
+                with col_r4:
+                    gain = dca_result['final_value'] - dca_result['total_invested']
+                    st.metric(
+                        "🏆 Gain/Perte (DCA)",
+                        f"${gain:+,.0f}",
+                        delta=f"PRU: ${dca_result['avg_cost_basis']:.2f}"
+                    )
+
+                # Comparaison DCA vs Lump Sum
+                st.markdown("### ⚔️ DCA vs Lump Sum")
+
+                if dca_result['dca_vs_lump'] > 0:
+                    st.success(f"🏆 **DCA gagnant !** La stratégie DCA a surperformé de **{dca_result['dca_vs_lump']:.1f}%** par rapport à un investissement unique.")
+                elif dca_result['dca_vs_lump'] < 0:
+                    st.info(f"📊 **Lump Sum gagnant.** L'investissement unique a surperformé de **{abs(dca_result['dca_vs_lump']):.1f}%** par rapport au DCA.")
+                else:
+                    st.info("🤝 **Égalité.** Les deux stratégies ont obtenu des résultats similaires.")
+
+                # Graphique d'évolution
+                st.markdown("### 📈 Évolution du Portefeuille")
+
+                investments_df = dca_result['investments']
+
+                fig_dca = go.Figure()
+
+                # Valeur du portefeuille
+                fig_dca.add_trace(go.Scatter(
+                    x=investments_df['date'],
+                    y=investments_df['portfolio_value'],
+                    mode='lines',
+                    name='Valeur du portefeuille (DCA)',
+                    line=dict(color='#2ecc71', width=2),
+                    fill='tozeroy',
+                    fillcolor='rgba(46, 204, 113, 0.2)'
+                ))
+
+                # Total investi
+                fig_dca.add_trace(go.Scatter(
+                    x=investments_df['date'],
+                    y=investments_df['total_invested'],
+                    mode='lines',
+                    name='Total investi',
+                    line=dict(color='#3498db', width=2, dash='dash')
+                ))
+
+                # Ligne de valeur Lump Sum
+                initial_price = hist['Close'].iloc[0]
+                lump_sum_shares = dca_result['total_invested'] / initial_price
+
+                # Calculer la valeur Lump Sum pour chaque date d'investissement
+                lump_values = []
+                for _, row in investments_df.iterrows():
+                    invested_at_date = row['total_invested']
+                    shares_lump = invested_at_date / initial_price
+                    lump_value = shares_lump * row['price']
+                    lump_values.append(lump_value)
+
+                fig_dca.add_trace(go.Scatter(
+                    x=investments_df['date'],
+                    y=lump_values,
+                    mode='lines',
+                    name='Valeur Lump Sum (comparaison)',
+                    line=dict(color='#e74c3c', width=2, dash='dot')
+                ))
+
+                fig_dca.update_layout(
+                    template='plotly_dark',
+                    xaxis_title='Date',
+                    yaxis_title='Valeur ($)',
+                    hovermode='x unified',
+                    height=450,
+                    legend=dict(yanchor="top", y=0.99, xanchor="left", x=0.01)
+                )
+
+                st.plotly_chart(fig_dca, use_container_width=True)
+
+                # Détails des investissements
+                with st.expander("📋 Détail des investissements"):
+                    # Créer un DataFrame formaté
+                    display_df = investments_df.copy()
+                    display_df['date'] = display_df['date'].dt.strftime('%Y-%m-%d')
+                    display_df['price'] = display_df['price'].apply(lambda x: f"${x:.2f}")
+                    display_df['shares_bought'] = display_df['shares_bought'].apply(lambda x: f"{x:.4f}")
+                    display_df['total_shares'] = display_df['total_shares'].apply(lambda x: f"{x:.4f}")
+                    display_df['total_invested'] = display_df['total_invested'].apply(lambda x: f"${x:,.0f}")
+                    display_df['portfolio_value'] = display_df['portfolio_value'].apply(lambda x: f"${x:,.0f}")
+                    display_df['cost_basis'] = display_df['cost_basis'].apply(lambda x: f"${x:.2f}")
+
+                    display_df.columns = ['Date', 'Prix', 'Actions achetées', 'Total actions',
+                                          'Total investi', 'Valeur portefeuille', 'PRU']
+
+                    st.dataframe(display_df, hide_index=True, use_container_width=True)
+
+                # Informations supplémentaires
+                st.markdown("---")
+                col_info1, col_info2, col_info3 = st.columns(3)
+
+                with col_info1:
+                    st.markdown("**📊 Statistiques DCA:**")
+                    st.write(f"• Nombre d'actions: {dca_result['total_shares']:.4f}")
+                    st.write(f"• Prix moyen d'achat: ${dca_result['avg_cost_basis']:.2f}")
+                    st.write(f"• Prix actuel: ${dca_result['final_price']:.2f}")
+
+                with col_info2:
+                    st.markdown("**💡 Avantages du DCA:**")
+                    st.write("• Réduit l'impact de la volatilité")
+                    st.write("• Discipline d'investissement")
+                    st.write("• Pas de timing de marché")
+
+                with col_info3:
+                    st.markdown("**⚠️ Limites:**")
+                    st.write("• Moins performant en marché haussier")
+                    st.write("• Frais de transaction multiples")
+                    st.write("• Simulation sur données passées")
+
+                st.caption("⚠️ Cette simulation est basée sur des données historiques. Les performances passées ne préjugent pas des performances futures.")
+
+        else:
+            st.warning("⚠️ Pas assez de données historiques pour simuler une stratégie DCA. Sélectionnez une période plus longue.")
 
 # Footer
 st.markdown("---")
