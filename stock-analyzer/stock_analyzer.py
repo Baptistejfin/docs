@@ -344,6 +344,130 @@ def calculate_all_period_returns(ticker_symbol: str):
     return results
 
 
+def calculate_dcf(fcf, growth_rate, terminal_growth, discount_rate, projection_years, shares_outstanding, total_debt, total_cash):
+    """
+    Calcule la valeur intrinsèque par action via le modèle DCF.
+
+    Args:
+        fcf: Free Cash Flow actuel
+        growth_rate: Taux de croissance du FCF pendant la période de projection (%)
+        terminal_growth: Taux de croissance perpétuel après la période de projection (%)
+        discount_rate: Taux d'actualisation / WACC (%)
+        projection_years: Nombre d'années de projection
+        shares_outstanding: Nombre d'actions en circulation
+        total_debt: Dette totale
+        total_cash: Trésorerie totale
+
+    Returns:
+        dict avec tous les détails du calcul DCF
+    """
+    # Convertir les pourcentages en décimales
+    g = growth_rate / 100
+    tg = terminal_growth / 100
+    r = discount_rate / 100
+
+    # Projeter les FCF futurs
+    projected_fcf = []
+    pv_fcf = []  # Present Value des FCF
+
+    current_fcf = fcf
+    for year in range(1, projection_years + 1):
+        future_fcf = current_fcf * (1 + g)
+        current_fcf = future_fcf
+        projected_fcf.append(future_fcf)
+
+        # Actualiser le FCF
+        pv = future_fcf / ((1 + r) ** year)
+        pv_fcf.append(pv)
+
+    # Valeur terminale (Gordon Growth Model)
+    terminal_fcf = projected_fcf[-1] * (1 + tg)
+    terminal_value = terminal_fcf / (r - tg)
+
+    # Actualiser la valeur terminale
+    pv_terminal = terminal_value / ((1 + r) ** projection_years)
+
+    # Valeur d'entreprise (Enterprise Value)
+    sum_pv_fcf = sum(pv_fcf)
+    enterprise_value = sum_pv_fcf + pv_terminal
+
+    # Valeur des capitaux propres (Equity Value)
+    equity_value = enterprise_value - total_debt + total_cash
+
+    # Valeur intrinsèque par action
+    intrinsic_value_per_share = equity_value / shares_outstanding if shares_outstanding > 0 else 0
+
+    return {
+        'projected_fcf': projected_fcf,
+        'pv_fcf': pv_fcf,
+        'sum_pv_fcf': sum_pv_fcf,
+        'terminal_value': terminal_value,
+        'pv_terminal': pv_terminal,
+        'enterprise_value': enterprise_value,
+        'equity_value': equity_value,
+        'intrinsic_value': intrinsic_value_per_share
+    }
+
+
+def estimate_wacc(info):
+    """
+    Estime le WACC (Weighted Average Cost of Capital) basé sur les données disponibles.
+    Utilise le modèle CAPM pour le coût des capitaux propres.
+    """
+    # Taux sans risque (approximation - rendement obligations 10 ans)
+    risk_free_rate = 0.04  # 4%
+
+    # Prime de risque du marché
+    market_risk_premium = 0.05  # 5%
+
+    # Beta de l'action
+    beta = info.get('beta', 1.0) or 1.0
+
+    # Coût des capitaux propres (CAPM)
+    cost_of_equity = risk_free_rate + beta * market_risk_premium
+
+    # Coût de la dette (approximation)
+    cost_of_debt = 0.05  # 5% par défaut
+    tax_rate = 0.25  # Taux d'imposition 25%
+
+    # Structure du capital
+    market_cap = info.get('marketCap', 0) or 0
+    total_debt = info.get('totalDebt', 0) or 0
+
+    total_capital = market_cap + total_debt
+
+    if total_capital > 0:
+        weight_equity = market_cap / total_capital
+        weight_debt = total_debt / total_capital
+
+        # WACC
+        wacc = (weight_equity * cost_of_equity) + (weight_debt * cost_of_debt * (1 - tax_rate))
+    else:
+        wacc = cost_of_equity
+
+    return wacc * 100  # Retourner en pourcentage
+
+
+def estimate_growth_rate(info, cashflow):
+    """
+    Estime le taux de croissance basé sur les données historiques et les prévisions.
+    """
+    # Essayer d'utiliser la croissance des revenus
+    revenue_growth = info.get('revenueGrowth')
+    earnings_growth = info.get('earningsGrowth')
+
+    if revenue_growth and revenue_growth > 0:
+        # Utiliser une moyenne pondérée
+        base_growth = revenue_growth * 100
+    elif earnings_growth and earnings_growth > 0:
+        base_growth = earnings_growth * 100
+    else:
+        base_growth = 5.0  # Défaut conservateur
+
+    # Limiter à des valeurs raisonnables
+    return min(max(base_growth, 0), 30)
+
+
 # ============ INTERFACE UTILISATEUR ============
 
 with st.sidebar:
@@ -842,6 +966,208 @@ if st.session_state.analysis_done and st.session_state.valid_tickers:
                 ]
             }
             st.dataframe(pd.DataFrame(dividend_data), hide_index=True, use_container_width=True)
+
+        st.markdown("---")
+
+        # ===== CALCULATEUR DCF =====
+        st.subheader("💰 Valorisation DCF (Discounted Cash Flow)")
+
+        # Récupérer les données nécessaires pour le DCF
+        fcf = info.get('freeCashflow', 0) or 0
+        shares_outstanding = info.get('sharesOutstanding', 0) or 0
+        total_debt = info.get('totalDebt', 0) or 0
+        total_cash = info.get('totalCash', 0) or 0
+        current_price = info.get('regularMarketPrice', 0) or 0
+
+        # Vérifier si le DCF est possible
+        if fcf > 0 and shares_outstanding > 0:
+            # Estimer les valeurs par défaut
+            default_wacc = estimate_wacc(info)
+            default_growth = estimate_growth_rate(info, data['cashflow'])
+
+            with st.expander("⚙️ Paramètres du modèle DCF (ajustables)", expanded=True):
+                st.markdown("**Ajustez les paramètres selon vos hypothèses :**")
+
+                col_dcf1, col_dcf2 = st.columns(2)
+
+                with col_dcf1:
+                    # FCF de base (modifiable)
+                    dcf_fcf = st.number_input(
+                        "💵 Free Cash Flow de base (USD)",
+                        value=float(fcf),
+                        min_value=0.0,
+                        step=1000000.0,
+                        format="%.0f",
+                        help="FCF actuel de l'entreprise. Vous pouvez l'ajuster selon vos estimations.",
+                        key="dcf_fcf"
+                    )
+
+                    # Taux de croissance
+                    dcf_growth = st.slider(
+                        "📈 Taux de croissance annuel (%)",
+                        min_value=0.0,
+                        max_value=30.0,
+                        value=min(default_growth, 25.0),
+                        step=0.5,
+                        help="Croissance estimée du FCF pendant la période de projection",
+                        key="dcf_growth"
+                    )
+
+                    # Nombre d'années
+                    dcf_years = st.slider(
+                        "📅 Années de projection",
+                        min_value=5,
+                        max_value=15,
+                        value=10,
+                        step=1,
+                        help="Nombre d'années pour projeter les flux de trésorerie",
+                        key="dcf_years"
+                    )
+
+                with col_dcf2:
+                    # Taux d'actualisation (WACC)
+                    dcf_discount = st.slider(
+                        "🏦 Taux d'actualisation / WACC (%)",
+                        min_value=5.0,
+                        max_value=20.0,
+                        value=min(max(default_wacc, 6.0), 15.0),
+                        step=0.25,
+                        help="Coût moyen pondéré du capital (WACC)",
+                        key="dcf_discount"
+                    )
+
+                    # Taux de croissance terminal
+                    dcf_terminal = st.slider(
+                        "♾️ Taux de croissance perpétuel (%)",
+                        min_value=0.0,
+                        max_value=4.0,
+                        value=2.5,
+                        step=0.25,
+                        help="Croissance à long terme (généralement 2-3%)",
+                        key="dcf_terminal"
+                    )
+
+                    # Marge de sécurité
+                    dcf_margin = st.slider(
+                        "🛡️ Marge de sécurité (%)",
+                        min_value=0,
+                        max_value=50,
+                        value=20,
+                        step=5,
+                        help="Réduction appliquée à la valeur intrinsèque pour plus de prudence",
+                        key="dcf_margin"
+                    )
+
+                # Afficher les données utilisées
+                st.markdown("---")
+                st.markdown("**📊 Données de l'entreprise :**")
+                col_info1, col_info2, col_info3, col_info4 = st.columns(4)
+                with col_info1:
+                    st.metric("Actions en circulation", format_value(shares_outstanding))
+                with col_info2:
+                    st.metric("Dette totale", format_value(total_debt, 'USD'))
+                with col_info3:
+                    st.metric("Trésorerie", format_value(total_cash, 'USD'))
+                with col_info4:
+                    st.metric("Beta", f"{info.get('beta', 'N/A'):.2f}" if info.get('beta') else "N/A")
+
+            # Calculer le DCF
+            if dcf_discount > dcf_terminal:  # Éviter division par zéro
+                dcf_result = calculate_dcf(
+                    fcf=dcf_fcf,
+                    growth_rate=dcf_growth,
+                    terminal_growth=dcf_terminal,
+                    discount_rate=dcf_discount,
+                    projection_years=dcf_years,
+                    shares_outstanding=shares_outstanding,
+                    total_debt=total_debt,
+                    total_cash=total_cash
+                )
+
+                intrinsic_value = dcf_result['intrinsic_value']
+                intrinsic_with_margin = intrinsic_value * (1 - dcf_margin / 100)
+
+                # Calcul du potentiel
+                if current_price > 0:
+                    upside = ((intrinsic_value - current_price) / current_price) * 100
+                    upside_with_margin = ((intrinsic_with_margin - current_price) / current_price) * 100
+                else:
+                    upside = 0
+                    upside_with_margin = 0
+
+                # Affichage des résultats
+                st.markdown("### 🎯 Résultats de la Valorisation DCF")
+
+                col_res1, col_res2, col_res3 = st.columns(3)
+
+                with col_res1:
+                    st.metric(
+                        "💵 Prix actuel",
+                        f"${current_price:.2f}"
+                    )
+
+                with col_res2:
+                    delta_color = "normal" if upside >= 0 else "inverse"
+                    st.metric(
+                        "🎯 Valeur intrinsèque",
+                        f"${intrinsic_value:.2f}",
+                        delta=f"{upside:+.1f}%",
+                        delta_color=delta_color
+                    )
+
+                with col_res3:
+                    st.metric(
+                        f"🛡️ Avec marge {dcf_margin}%",
+                        f"${intrinsic_with_margin:.2f}",
+                        delta=f"{upside_with_margin:+.1f}%",
+                        delta_color="normal" if upside_with_margin >= 0 else "inverse"
+                    )
+
+                # Indicateur visuel
+                if upside >= 20:
+                    st.success(f"🟢 **SOUS-ÉVALUÉ** - Potentiel de hausse de {upside:.1f}% selon ce modèle DCF")
+                elif upside >= 0:
+                    st.info(f"🟡 **CORRECTEMENT VALORISÉ** - Proche de la valeur intrinsèque estimée")
+                else:
+                    st.warning(f"🔴 **SURÉVALUÉ** - Le prix actuel est {abs(upside):.1f}% au-dessus de la valeur DCF estimée")
+
+                # Détail des calculs dans un expander
+                with st.expander("📋 Détail des calculs DCF"):
+                    # Tableau des FCF projetés
+                    years = list(range(1, dcf_years + 1))
+                    df_fcf = pd.DataFrame({
+                        'Année': years,
+                        'FCF Projeté': [format_value(v, 'USD') for v in dcf_result['projected_fcf']],
+                        'FCF Actualisé': [format_value(v, 'USD') for v in dcf_result['pv_fcf']]
+                    })
+                    st.dataframe(df_fcf, hide_index=True, use_container_width=True)
+
+                    st.markdown("---")
+
+                    col_detail1, col_detail2 = st.columns(2)
+                    with col_detail1:
+                        st.markdown("**Valeur des flux actualisés:**")
+                        st.write(f"Somme des FCF actualisés: {format_value(dcf_result['sum_pv_fcf'], 'USD')}")
+                        st.write(f"Valeur terminale: {format_value(dcf_result['terminal_value'], 'USD')}")
+                        st.write(f"Valeur terminale actualisée: {format_value(dcf_result['pv_terminal'], 'USD')}")
+
+                    with col_detail2:
+                        st.markdown("**Valeur de l'entreprise:**")
+                        st.write(f"Enterprise Value: {format_value(dcf_result['enterprise_value'], 'USD')}")
+                        st.write(f"- Dette: {format_value(total_debt, 'USD')}")
+                        st.write(f"+ Trésorerie: {format_value(total_cash, 'USD')}")
+                        st.write(f"**Equity Value: {format_value(dcf_result['equity_value'], 'USD')}**")
+
+                # Avertissement
+                st.caption("⚠️ Ce modèle DCF est une estimation basée sur des hypothèses. Les résultats dépendent fortement des paramètres choisis. Faites vos propres recherches avant d'investir.")
+
+            else:
+                st.error("⚠️ Le taux d'actualisation doit être supérieur au taux de croissance perpétuel.")
+
+        else:
+            st.warning("⚠️ Données insuffisantes pour calculer le DCF (Free Cash Flow négatif ou non disponible).")
+            if fcf <= 0:
+                st.info(f"Free Cash Flow actuel: {format_value(fcf, 'USD')} - Le DCF nécessite un FCF positif.")
 
         st.markdown("---")
 
