@@ -1,6 +1,6 @@
 """
-Stock Analyzer Pro v7.0 - Version Complète avec Analyse Technique
-Analyse ESG + Fondamentale Avancée + Historique 10 ans + DCF + Free Form + Indicateurs Techniques
+Stock Analyzer Pro v8.0 - Version Complète avec Analyse Cygne Noir
+Analyse ESG + Fondamentale Avancée + Historique 10 ans + DCF + Indicateurs Techniques + Black Swan
 """
 
 import streamlit as st
@@ -27,6 +27,33 @@ except ImportError:
             'esg_data': {'summary': {'scandals_found': 0, 'total_fines_usd': 0, 'sanctions_matches': 0, 'governance_issues': 0, 'eu_facilities': 0, 'jurisdictions': 0}},
             'flags': [], 'recommendations': []
         }
+
+# Gestion du module Black Swan (Cygne Noir)
+try:
+    from black_swan_analyzer import (
+        BlackSwanAnalyzer,
+        get_risk_category_emoji,
+        get_risk_category_name_fr,
+        get_trend_display
+    )
+    BLACK_SWAN_AVAILABLE = True
+except ImportError:
+    BLACK_SWAN_AVAILABLE = False
+
+    # Fallback classes si le module n'est pas disponible
+    class BlackSwanAnalyzer:
+        def __init__(self, *args, **kwargs):
+            pass
+        def analyze(self, ticker):
+            return None
+        def plot_risk_matrix(self, analysis):
+            return None
+        def plot_risk_bars(self, analysis, top_n=10):
+            return None
+
+    def get_risk_category_emoji(cat): return "⚠️"
+    def get_risk_category_name_fr(cat): return cat
+    def get_trend_display(trend, change): return ("→", "#95a5a6")
 
 st.set_page_config(page_title="Stock Analyzer Pro", page_icon="📈", layout="wide")
 st.title("📊 Analyseur d'Actions - Niveau Institutionnel")
@@ -1184,10 +1211,298 @@ def display_esg_section(ticker, info):
         st.caption("Conseil: Utilisez le mode 'Analyse ESG Pro' pour une analyse plus complète avec 10 sources de données.")
 
 
+# ============ MODULE CYGNE NOIR (BLACK SWAN) ============
+
+@st.cache_data(ttl=3600)  # Cache de 1 heure
+def get_black_swan_analysis(ticker: str) -> dict:
+    """Récupère l'analyse Cygne Noir avec cache."""
+    if not BLACK_SWAN_AVAILABLE:
+        return None
+    try:
+        analyzer = BlackSwanAnalyzer()
+        return analyzer.analyze(ticker)
+    except Exception as e:
+        st.error(f"Erreur analyse Cygne Noir: {e}")
+        return None
+
+
+def display_black_swan_section(ticker: str, info: dict):
+    """Affiche la section d'analyse des risques Cygne Noir."""
+
+    st.subheader("🦢 Analyse Cygne Noir - Risques Extrêmes")
+
+    if not BLACK_SWAN_AVAILABLE:
+        st.warning("⚠️ Module Black Swan non disponible. Vérifiez que `black_swan_analyzer.py` est présent.")
+        return
+
+    # Explication du concept
+    with st.expander("ℹ️ Qu'est-ce qu'un Cygne Noir ?", expanded=False):
+        st.markdown("""
+        **La théorie du Cygne Noir** (Nassim Nicholas Taleb) décrit des événements :
+        - **Rares** : Hors du domaine des attentes normales
+        - **Impact extrême** : Conséquences majeures sur les marchés
+        - **Rationalisés a posteriori** : Expliqués après coup comme prévisibles
+
+        **Exemples historiques :**
+        - Crise financière de 2008
+        - Pandémie COVID-19 (2020)
+        - Guerre en Ukraine (2022)
+        - Effondrement de Lehman Brothers
+
+        Cette analyse identifie les risques potentiels spécifiques à l'entreprise et son secteur.
+        """)
+
+    # Récupérer l'analyse
+    with st.spinner("🔍 Analyse des risques en cours..."):
+        analysis = get_black_swan_analysis(ticker)
+
+    if not analysis:
+        st.error("❌ Impossible de récupérer l'analyse des risques")
+        return
+
+    # === SCORE GLOBAL ===
+    st.markdown("### 🎯 Score de Risque Global")
+
+    score = analysis['global_risk_score']
+    risk_level = analysis['risk_level']
+    risk_color = analysis['risk_color']
+
+    # Jauge de risque
+    col_score1, col_score2, col_score3 = st.columns([1, 2, 1])
+
+    with col_score1:
+        st.metric(
+            "Score Global",
+            f"{score}/10",
+            delta=risk_level,
+            delta_color="inverse" if score < 5 else "normal"
+        )
+
+    with col_score2:
+        # Barre de progression stylisée
+        progress_html = f"""
+        <div style="background: linear-gradient(to right, #27ae60 0%, #f1c40f 40%, #e67e22 60%, #e74c3c 100%);
+                    height: 30px; border-radius: 15px; position: relative; margin: 10px 0;">
+            <div style="position: absolute; left: {score * 10}%; top: -5px;
+                        width: 40px; height: 40px; background: white; border-radius: 50%;
+                        border: 4px solid {risk_color}; transform: translateX(-50%);
+                        display: flex; align-items: center; justify-content: center;
+                        font-weight: bold; font-size: 14px; color: {risk_color};">{score}</div>
+        </div>
+        <div style="display: flex; justify-content: space-between; font-size: 12px; color: #888;">
+            <span>Faible</span>
+            <span>Modéré</span>
+            <span>Élevé</span>
+            <span>Critique</span>
+        </div>
+        """
+        st.markdown(progress_html, unsafe_allow_html=True)
+
+    with col_score3:
+        st.metric("Risques Analysés", analysis['total_risks_analyzed'])
+        st.caption(f"Secteur: {analysis['company_info']['sector']}")
+
+    # === MÉTRIQUES DE VOLATILITÉ ===
+    st.markdown("### 📊 Indicateurs de Stress")
+
+    vol_col1, vol_col2, vol_col3, vol_col4 = st.columns(4)
+
+    with vol_col1:
+        vol_1y = analysis['company_info']['volatility_1y']
+        st.metric("Volatilité 1 an", f"{vol_1y:.1f}%")
+
+    with vol_col2:
+        vol_20d = analysis['company_info']['volatility_20d']
+        vol_ratio = analysis['company_info']['volatility_ratio']
+        delta_color = "inverse" if vol_ratio > 1.2 else "normal"
+        st.metric(
+            "Volatilité 20 jours",
+            f"{vol_20d:.1f}%",
+            delta=f"x{vol_ratio:.2f} vs 1Y",
+            delta_color=delta_color
+        )
+
+    with vol_col3:
+        current_price = analysis['company_info']['current_price']
+        st.metric("Prix Actuel", f"${current_price:.2f}")
+
+    with vol_col4:
+        market_cap = analysis['company_info'].get('market_cap', 0)
+        if market_cap:
+            if market_cap >= 1e12:
+                cap_str = f"${market_cap/1e12:.1f}T"
+            elif market_cap >= 1e9:
+                cap_str = f"${market_cap/1e9:.1f}B"
+            else:
+                cap_str = f"${market_cap/1e6:.1f}M"
+            st.metric("Market Cap", cap_str)
+
+    st.markdown("---")
+
+    # === TOP RISQUES ===
+    st.markdown("### ⚠️ Principaux Risques Identifiés")
+
+    top_risks = analysis.get('top_risks', [])[:5]
+
+    if not top_risks:
+        st.info("Aucun risque majeur identifié pour cette entreprise.")
+        return
+
+    for i, risk in enumerate(top_risks, 1):
+        emoji = get_risk_category_emoji(risk['category'])
+        category_name = get_risk_category_name_fr(risk['category'])
+        trend_text, trend_color = get_trend_display(risk['probability_trend'], risk['probability_change'])
+
+        # Couleur basée sur la probabilité
+        if risk['probability_percent'] >= 50:
+            prob_color = "#e74c3c"
+            prob_bg = "rgba(231, 76, 60, 0.1)"
+        elif risk['probability_percent'] >= 30:
+            prob_color = "#e67e22"
+            prob_bg = "rgba(230, 126, 34, 0.1)"
+        elif risk['probability_percent'] >= 15:
+            prob_color = "#f1c40f"
+            prob_bg = "rgba(241, 196, 15, 0.1)"
+        else:
+            prob_color = "#27ae60"
+            prob_bg = "rgba(39, 174, 96, 0.1)"
+
+        with st.expander(f"{emoji} **{risk['name_fr']}** — Probabilité: {risk['probability_percent']:.1f}%", expanded=(i <= 2)):
+
+            risk_col1, risk_col2, risk_col3 = st.columns([1, 1, 1])
+
+            with risk_col1:
+                st.markdown(f"**Catégorie:** {category_name}")
+                st.markdown(f"**Probabilité:** <span style='color:{prob_color}; font-size: 1.2em; font-weight: bold;'>{risk['probability_percent']:.1f}%</span>", unsafe_allow_html=True)
+                st.markdown(f"**Tendance:** <span style='color:{trend_color};'>{trend_text}</span>", unsafe_allow_html=True)
+
+            with risk_col2:
+                st.markdown("**Scénarios d'Impact:**")
+                scenarios = risk['impact_scenarios']
+                st.markdown(f"- 🟡 Modéré: **{scenarios['moderate']['percentage']:.0f}%** → ${scenarios['moderate']['price_target']:.2f}")
+                st.markdown(f"- 🟠 Sévère: **{scenarios['severe']['percentage']:.0f}%** → ${scenarios['severe']['price_target']:.2f}")
+                st.markdown(f"- 🔴 Extrême: **{scenarios['extreme']['percentage']:.0f}%** → ${scenarios['extreme']['price_target']:.2f}")
+
+            with risk_col3:
+                st.markdown("**Indicateurs News:**")
+                sentiment = risk['news_sentiment']
+                if sentiment < -0.3:
+                    sent_text = "🔴 Négatif"
+                elif sentiment > 0.3:
+                    sent_text = "🟢 Positif"
+                else:
+                    sent_text = "⚪ Neutre"
+                st.markdown(f"- Sentiment: {sent_text} ({sentiment:.2f})")
+                st.markdown(f"- Articles pertinents: {risk['relevant_news_count']}")
+                st.markdown(f"- Récupération estimée: ~{scenarios['recovery_months']} mois")
+
+            # Actualités pertinentes
+            if risk.get('relevant_headlines'):
+                st.markdown("**📰 Actualités récentes:**")
+                for headline in risk['relevant_headlines'][:3]:
+                    sent_emoji = "🔴" if headline['sentiment'] < -0.2 else "🟢" if headline['sentiment'] > 0.2 else "⚪"
+                    st.markdown(f"- {sent_emoji} {headline['title'][:80]}...")
+
+    st.markdown("---")
+
+    # === VISUALISATIONS ===
+    st.markdown("### 📈 Visualisations")
+
+    viz_tab1, viz_tab2, viz_tab3 = st.tabs(["🎯 Matrice Risque/Impact", "📊 Probabilités", "💰 Scénarios Prix"])
+
+    with viz_tab1:
+        try:
+            analyzer = BlackSwanAnalyzer()
+            fig_matrix = analyzer.plot_risk_matrix(analysis)
+            if fig_matrix:
+                st.plotly_chart(fig_matrix, use_container_width=True)
+
+                st.caption("""
+                **Lecture de la matrice:**
+                - **Axe X** : Probabilité d'occurrence (%)
+                - **Axe Y** : Impact potentiel sur le cours (%)
+                - **Taille des bulles** : Score de risque combiné
+                - Les risques dans la zone rouge (haut-droite) sont les plus critiques
+                """)
+        except Exception as e:
+            st.error(f"Erreur lors de la génération de la matrice: {e}")
+
+    with viz_tab2:
+        try:
+            analyzer = BlackSwanAnalyzer()
+            fig_bars = analyzer.plot_risk_bars(analysis, top_n=10)
+            if fig_bars:
+                st.plotly_chart(fig_bars, use_container_width=True)
+        except Exception as e:
+            st.error(f"Erreur lors de la génération du graphique: {e}")
+
+    with viz_tab3:
+        try:
+            analyzer = BlackSwanAnalyzer()
+            fig_scenarios = analyzer.plot_impact_scenarios(analysis, top_n=5)
+            if fig_scenarios:
+                st.plotly_chart(fig_scenarios, use_container_width=True)
+
+                st.caption("""
+                **Scénarios d'impact:**
+                - 🟡 **Modéré** : Impact limité, récupération rapide
+                - 🟠 **Sévère** : Impact significatif, récupération lente
+                - 🔴 **Extrême** : Impact majeur type "Cygne Noir"
+                """)
+        except Exception as e:
+            st.error(f"Erreur lors de la génération des scénarios: {e}")
+
+    # === TABLEAU RÉCAPITULATIF ===
+    with st.expander("📋 Tableau Complet des Risques"):
+        risks_data = []
+        for risk in analysis.get('risks', []):
+            risks_data.append({
+                'Risque': risk['name_fr'],
+                'Catégorie': get_risk_category_name_fr(risk['category']),
+                'Probabilité': f"{risk['probability_percent']:.1f}%",
+                'Impact Min': f"{risk['impact_range'][0]}%",
+                'Impact Max': f"{risk['impact_range'][1]}%",
+                'Tendance': risk['probability_trend'].upper(),
+                'Sentiment': f"{risk['news_sentiment']:.2f}"
+            })
+
+        if risks_data:
+            df_risks = pd.DataFrame(risks_data)
+            st.dataframe(df_risks, hide_index=True, use_container_width=True)
+
+    # === MÉTHODOLOGIE ===
+    with st.expander("🔬 Méthodologie"):
+        st.markdown(f"""
+        **Sources de données:**
+        - Données financières: Yahoo Finance (yfinance)
+        - Actualités: {analysis['methodology']['news_source']}
+        - Analyse sentiment: {analysis['methodology']['sentiment_analysis']}
+
+        **Calcul des probabilités:**
+        - Score de base par type de risque (données historiques)
+        - Ajustement sentiment news (-15% à +20%)
+        - Ajustement fréquence mentions (0 à +15%)
+        - Ajustement volatilité marché (-5% à +15%)
+
+        **Calcul des impacts:**
+        - Basé sur des événements historiques similaires
+        - Ajusté selon le beta de l'action
+        - 3 scénarios: modéré, sévère, extrême
+
+        **Fréquence de mise à jour:** {analysis['methodology']['update_frequency']}
+
+        **Dernière mise à jour:** {analysis['last_updated']}
+        """)
+
+
 # ============ ANALYSE HISTORIQUE COMPLÈTE ============
 
-def display_historical_analysis(data, info):
+def display_historical_analysis(data, info, ticker=None):
     """Affiche l'analyse historique sur 10 ans avec tous les outils."""
+
+    # Récupérer le ticker si non fourni
+    if not ticker:
+        ticker = info.get('symbol', '')
 
     metrics = get_historical_metrics(data)
 
@@ -1209,13 +1524,15 @@ def display_historical_analysis(data, info):
         with mod_col4:
             show_cashflow = st.checkbox("Cash Flow", value=True)
 
-        mod_col5, mod_col6, mod_col7, _ = st.columns(4)
+        mod_col5, mod_col6, mod_col7, mod_col8 = st.columns(4)
         with mod_col5:
             show_ratios = st.checkbox("Ratios", value=True)
         with mod_col6:
             show_dcf = st.checkbox("DCF", value=True)
         with mod_col7:
             show_freeform = st.checkbox("Free Form", value=True)
+        with mod_col8:
+            show_blackswan = st.checkbox("🦢 Cygne Noir", value=True)
 
     # === ONGLETS DYNAMIQUES ===
     tabs_list = []
@@ -1235,6 +1552,8 @@ def display_historical_analysis(data, info):
         tabs_names.append("🧮 DCF")
     if show_freeform:
         tabs_names.append("📋 Free Form")
+    if show_blackswan:
+        tabs_names.append("🦢 Cygne Noir")
 
     if not tabs_names:
         st.info("Sélectionnez au moins un module à afficher")
@@ -1571,6 +1890,13 @@ def display_historical_analysis(data, info):
     if show_freeform:
         with tabs[tab_idx]:
             display_free_form_tool(data, info)
+        tab_idx += 1
+
+    # TAB 8: CYGNE NOIR (BLACK SWAN)
+    if show_blackswan:
+        with tabs[tab_idx]:
+            # Utiliser le ticker passé en paramètre
+            display_black_swan_section(ticker, info)
 
     # BONUS: Sélecteur d'années
     st.markdown("---")
@@ -1593,13 +1919,17 @@ with st.sidebar:
         st.markdown("---")
         st.markdown("### 📊 Fonctionnalités")
         st.caption("""
-        **🆕 v7.0 - Nouveautés:**
+        **🆕 v8.0 - Nouveautés:**
+        - 🦢 Analyse Cygne Noir (risques extrêmes)
+        - Scoring dynamique des risques
+        - Analyse sentiment actualités
+        - Matrice risque/impact interactive
+        - Scénarios d'impact financier
+
+        **v7.0:**
         - Sélecteur de période (1J à Max)
-        - Indicateurs techniques (RSI, MA, MACD...)
-        - Mode plein écran graphique
-        - DCF amélioré avec prix cible
-        - Module interactif personnalisable
-        - Données ESG intégrées
+        - Indicateurs techniques
+        - DCF amélioré
         """)
 
 
@@ -1655,7 +1985,7 @@ if analysis_mode == '📈 Analyse Fondamentale':
                 st.markdown("---")
 
                 # === ANALYSE HISTORIQUE 10 ANS ===
-                display_historical_analysis(data, info)
+                display_historical_analysis(data, info, ticker)
 
         else:
             st.error(f"❌ Entreprise '{company_name}' non trouvée")
@@ -1747,4 +2077,4 @@ elif analysis_mode == '🌱 Analyse ESG Pro':
 # ============ FOOTER ============
 
 st.markdown("---")
-st.caption("📊 Stock Analyzer Pro v7.0 - Données: Yahoo Finance | 🆕 Indicateurs Techniques | 🆕 DCF Amélioré | 🆕 Module Interactif | 🆕 ESG Intégré")
+st.caption("📊 Stock Analyzer Pro v8.0 - Données: Yahoo Finance | 🦢 Cygne Noir | Indicateurs Techniques | DCF Amélioré | Module Interactif | ESG Intégré")
