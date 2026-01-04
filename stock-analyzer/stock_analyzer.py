@@ -1993,6 +1993,17 @@ def update_assistant_context(ticker: str, info: dict, data: dict = None):
     st.session_state.current_company_context = context
 
 
+# ============ INITIALISATION SESSION STATE ============
+
+# Persister les données d'analyse pour éviter la perte lors des clics
+if "analysis_data" not in st.session_state:
+    st.session_state.analysis_data = None
+if "analysis_ticker" not in st.session_state:
+    st.session_state.analysis_ticker = None
+if "analysis_company" not in st.session_state:
+    st.session_state.analysis_company = None
+
+
 # ============ SIDEBAR ============
 
 with st.sidebar:
@@ -2028,6 +2039,7 @@ with st.sidebar:
 if analysis_mode == '📈 Analyse Fondamentale':
     st.header("📈 Analyse Fondamentale Avancée")
 
+    # Charger les données uniquement si le bouton Analyser est cliqué
     if analyze_button and company_name:
         with st.spinner("Recherche..."):
             ticker = get_ticker_from_name(company_name)
@@ -2037,53 +2049,67 @@ if analysis_mode == '📈 Analyse Fondamentale':
                 data = get_stock_data_full(ticker, '10y')
 
             if data and data['info'] and data['hist'] is not None and not data['hist'].empty:
-                info = data['info']
-                hist = data['hist']
-
-                # Mettre à jour le contexte de l'assistant IA
-                if AI_ASSISTANT_AVAILABLE:
-                    init_ai_assistant()
-                    update_assistant_context(ticker, info, {"data": data})
-
-                st.subheader(f"🏢 {info.get('shortName', ticker)} ({ticker})")
-
-                if info.get('longBusinessSummary'):
-                    with st.expander("📋 Description"):
-                        st.write(info['longBusinessSummary'])
-
-                # Métriques clés
-                col1, col2, col3, col4, col5, col6 = st.columns(6)
-                with col1:
-                    st.metric("Prix", f"${info.get('regularMarketPrice', 0):.2f}")
-                with col2:
-                    change = info.get('regularMarketChangePercent', 0) or 0
-                    st.metric("Var. Jour", f"{change:.2f}%")
-                with col3:
-                    st.metric("Market Cap", format_value(info.get('marketCap')))
-                with col4:
-                    st.metric("P/E", format_ratio(info.get('trailingPE')))
-                with col5:
-                    st.metric("52W High", f"${info.get('fiftyTwoWeekHigh', 0):.2f}")
-                with col6:
-                    st.metric("52W Low", f"${info.get('fiftyTwoWeekLow', 0):.2f}")
-
-                st.markdown("---")
-
-                # === GRAPHIQUE AVEC INDICATEURS TECHNIQUES ===
-                display_price_chart_with_indicators(ticker, info, hist)
-
-                st.markdown("---")
-
-                # === DONNÉES ESG ===
-                display_esg_section(ticker, info)
-
-                st.markdown("---")
-
-                # === ANALYSE HISTORIQUE 10 ANS ===
-                display_historical_analysis(data, info, ticker)
-
+                # SAUVEGARDER dans session_state pour persister les données
+                st.session_state.analysis_data = data
+                st.session_state.analysis_ticker = ticker
+                st.session_state.analysis_company = company_name
+            else:
+                st.error("❌ Données non disponibles pour cette entreprise")
+                st.session_state.analysis_data = None
         else:
             st.error(f"❌ Entreprise '{company_name}' non trouvée")
+            st.session_state.analysis_data = None
+
+    # AFFICHER l'analyse si les données sont disponibles (persistées dans session_state)
+    if st.session_state.analysis_data is not None:
+        data = st.session_state.analysis_data
+        ticker = st.session_state.analysis_ticker
+        info = data['info']
+        hist = data['hist']
+
+        # Mettre à jour le contexte de l'assistant IA
+        if AI_ASSISTANT_AVAILABLE:
+            init_ai_assistant()
+            update_assistant_context(ticker, info, {"data": data})
+
+        st.subheader(f"🏢 {info.get('shortName', ticker)} ({ticker})")
+
+        if info.get('longBusinessSummary'):
+            with st.expander("📋 Description"):
+                st.write(info['longBusinessSummary'])
+
+        # Métriques clés
+        col1, col2, col3, col4, col5, col6 = st.columns(6)
+        with col1:
+            st.metric("Prix", f"${info.get('regularMarketPrice', 0):.2f}")
+        with col2:
+            change = info.get('regularMarketChangePercent', 0) or 0
+            st.metric("Var. Jour", f"{change:.2f}%")
+        with col3:
+            st.metric("Market Cap", format_value(info.get('marketCap')))
+        with col4:
+            st.metric("P/E", format_ratio(info.get('trailingPE')))
+        with col5:
+            st.metric("52W High", f"${info.get('fiftyTwoWeekHigh', 0):.2f}")
+        with col6:
+            st.metric("52W Low", f"${info.get('fiftyTwoWeekLow', 0):.2f}")
+
+        st.markdown("---")
+
+        # === GRAPHIQUE AVEC INDICATEURS TECHNIQUES ===
+        display_price_chart_with_indicators(ticker, info, hist)
+
+        st.markdown("---")
+
+        # === DONNÉES ESG ===
+        display_esg_section(ticker, info)
+
+        st.markdown("---")
+
+        # === ANALYSE HISTORIQUE 10 ANS ===
+        display_historical_analysis(data, info, ticker)
+    else:
+        st.info("👆 Entrez un nom d'entreprise et cliquez sur **Analyser** pour commencer.")
 
 
 # ============ ANALYSE ESG PRO ============
