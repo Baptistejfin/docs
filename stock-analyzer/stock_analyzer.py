@@ -1944,6 +1944,55 @@ def display_historical_analysis(data, info, ticker=None):
     display_year_selector_view(data, info)
 
 
+# ============ ASSISTANT IA (ALADDIN-LIKE) - FONCTIONS ============
+
+def init_ai_assistant():
+    """Initialise l'assistant IA dans la session."""
+    import os
+
+    if "ai_assistant" not in st.session_state:
+        # Vérifier si une clé API Mistral est configurée
+        mistral_api_key = os.environ.get("MISTRAL_API_KEY", "")
+
+        if mistral_api_key:
+            # Utiliser l'API Mistral Cloud
+            st.session_state.ai_assistant = MistralAssistant(
+                provider=AIProvider.MISTRAL_API,
+                api_key=mistral_api_key,
+                model="mistral-small-latest"
+            )
+            st.session_state.ai_provider = "cloud"
+        else:
+            # Utiliser Ollama en local
+            st.session_state.ai_assistant = MistralAssistant(
+                provider=AIProvider.OLLAMA,
+                model="mistral:latest"
+            )
+            st.session_state.ai_provider = "local"
+
+    if "chat_messages" not in st.session_state:
+        st.session_state.chat_messages = []
+    if "chat_open" not in st.session_state:
+        st.session_state.chat_open = False
+    if "current_company_context" not in st.session_state:
+        st.session_state.current_company_context = None
+
+
+def update_assistant_context(ticker: str, info: dict, data: dict = None):
+    """Met à jour le contexte de l'assistant avec les données de l'entreprise."""
+    if not AI_ASSISTANT_AVAILABLE:
+        return
+
+    context = format_financial_context(info, data)
+
+    if data:
+        if "dcf_results" in data:
+            context["dcf_results"] = data["dcf_results"]
+
+    st.session_state.ai_assistant.set_context(context)
+    st.session_state.current_company_context = context
+
+
 # ============ SIDEBAR ============
 
 with st.sidebar:
@@ -2120,55 +2169,7 @@ elif analysis_mode == '🌱 Analyse ESG Pro':
             st.error(f"❌ Entreprise non trouvée")
 
 
-# ============ ASSISTANT IA (ALADDIN-LIKE) ============
-
-def init_ai_assistant():
-    """Initialise l'assistant IA dans la session."""
-    import os
-
-    if "ai_assistant" not in st.session_state:
-        # Vérifier si une clé API Mistral est configurée
-        mistral_api_key = os.environ.get("MISTRAL_API_KEY", "")
-
-        if mistral_api_key:
-            # Utiliser l'API Mistral Cloud
-            st.session_state.ai_assistant = MistralAssistant(
-                provider=AIProvider.MISTRAL_API,
-                api_key=mistral_api_key,
-                model="mistral-small-latest"  # Options: mistral-small-latest, mistral-medium-latest, mistral-large-latest
-            )
-            st.session_state.ai_provider = "cloud"
-        else:
-            # Utiliser Ollama en local
-            st.session_state.ai_assistant = MistralAssistant(
-                provider=AIProvider.OLLAMA,
-                model="mistral:latest"
-            )
-            st.session_state.ai_provider = "local"
-
-    if "chat_messages" not in st.session_state:
-        st.session_state.chat_messages = []
-    if "chat_open" not in st.session_state:
-        st.session_state.chat_open = False
-    if "current_company_context" not in st.session_state:
-        st.session_state.current_company_context = None
-
-
-def update_assistant_context(ticker: str, info: dict, data: dict = None):
-    """Met à jour le contexte de l'assistant avec les données de l'entreprise."""
-    if not AI_ASSISTANT_AVAILABLE:
-        return
-
-    context = format_financial_context(info, data)
-
-    # Ajouter les données supplémentaires
-    if data:
-        if "dcf_results" in data:
-            context["dcf_results"] = data["dcf_results"]
-
-    st.session_state.ai_assistant.set_context(context)
-    st.session_state.current_company_context = context
-
+# ============ ASSISTANT IA (ALADDIN-LIKE) - UI ============
 
 def render_chat_panel():
     """Affiche le panneau de chat latéral."""
