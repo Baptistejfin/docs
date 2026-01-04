@@ -2124,11 +2124,28 @@ elif analysis_mode == '🌱 Analyse ESG Pro':
 
 def init_ai_assistant():
     """Initialise l'assistant IA dans la session."""
+    import os
+
     if "ai_assistant" not in st.session_state:
-        st.session_state.ai_assistant = MistralAssistant(
-            provider=AIProvider.OLLAMA,
-            model="mistral:latest"
-        )
+        # Vérifier si une clé API Mistral est configurée
+        mistral_api_key = os.environ.get("MISTRAL_API_KEY", "")
+
+        if mistral_api_key:
+            # Utiliser l'API Mistral Cloud
+            st.session_state.ai_assistant = MistralAssistant(
+                provider=AIProvider.MISTRAL_API,
+                api_key=mistral_api_key,
+                model="mistral-small-latest"  # Options: mistral-small-latest, mistral-medium-latest, mistral-large-latest
+            )
+            st.session_state.ai_provider = "cloud"
+        else:
+            # Utiliser Ollama en local
+            st.session_state.ai_assistant = MistralAssistant(
+                provider=AIProvider.OLLAMA,
+                model="mistral:latest"
+            )
+            st.session_state.ai_provider = "local"
+
     if "chat_messages" not in st.session_state:
         st.session_state.chat_messages = []
     if "chat_open" not in st.session_state:
@@ -2204,22 +2221,38 @@ def display_ai_chat_sidebar():
         st.markdown("---")
         st.markdown("### 🤖 Assistant IA")
 
-        # Vérifier la disponibilité d'Ollama
+        # Vérifier la disponibilité
         assistant = st.session_state.ai_assistant
+        provider = st.session_state.get("ai_provider", "local")
         is_available = assistant.check_availability()
 
         if not is_available:
-            st.warning("""
-            ⚠️ **Ollama non détecté**
+            if provider == "cloud":
+                st.error("""
+                ❌ **Erreur API Mistral**
 
-            Pour utiliser l'assistant IA :
-            1. Installez [Ollama](https://ollama.ai)
-            2. Lancez : `ollama run mistral`
-            3. Rafraîchissez la page
-            """)
+                Vérifiez que :
+                1. Votre clé API est valide
+                2. Vous avez des crédits disponibles
+                """)
+            else:
+                st.warning("""
+                ⚠️ **Ollama non détecté**
+
+                Pour utiliser l'assistant IA :
+                1. Installez [Ollama](https://ollama.ai)
+                2. Lancez : `ollama run mistral`
+                3. Rafraîchissez la page
+
+                **Ou** configurez `MISTRAL_API_KEY` pour utiliser le cloud.
+                """)
             return
 
-        st.success("✅ IA disponible")
+        # Afficher le provider utilisé
+        if provider == "cloud":
+            st.success("✅ IA Cloud (Mistral API)")
+        else:
+            st.success("✅ IA Locale (Ollama)")
 
         # Contexte actuel
         if st.session_state.current_company_context:
