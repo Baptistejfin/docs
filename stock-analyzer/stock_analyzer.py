@@ -1,6 +1,6 @@
 """
-Stock Analyzer Pro v8.0 - Version Complète avec Analyse Cygne Noir
-Analyse ESG + Fondamentale Avancée + Historique 10 ans + DCF + Indicateurs Techniques + Black Swan
+Stock Analyzer Pro v8.0 - Version Complète avec Analyse Cygne Noir + Assistant IA
+Analyse ESG + Fondamentale Avancée + Historique 10 ans + DCF + Indicateurs Techniques + Black Swan + ALADDIN-Like AI
 """
 
 import streamlit as st
@@ -54,6 +54,47 @@ except ImportError:
     def get_risk_category_emoji(cat): return "⚠️"
     def get_risk_category_name_fr(cat): return cat
     def get_trend_display(trend, change): return ("→", "#95a5a6")
+
+# Gestion du module AI Assistant (ALADDIN-Like)
+try:
+    from ai_assistant import (
+        MistralAssistant,
+        AIProvider,
+        QUICK_ACTIONS,
+        REPORT_TYPES,
+        get_assistant_css,
+        format_financial_context,
+        StreamlitChatUI
+    )
+    AI_ASSISTANT_AVAILABLE = True
+except ImportError:
+    AI_ASSISTANT_AVAILABLE = False
+
+    class AIProvider:
+        OLLAMA = "ollama"
+        MISTRAL_API = "mistral_api"
+
+    class MistralAssistant:
+        def __init__(self, *args, **kwargs):
+            self.is_available = False
+        def check_availability(self):
+            return False
+        def set_context(self, data):
+            pass
+        def chat(self, msg, stream=True):
+            yield "Module AI Assistant non disponible."
+        def get_welcome_message(self):
+            return "Module AI Assistant non disponible."
+        def clear_history(self):
+            pass
+
+    QUICK_ACTIONS = []
+    REPORT_TYPES = []
+    def get_assistant_css(): return ""
+    def format_financial_context(info, data=None): return {}
+    class StreamlitChatUI:
+        @staticmethod
+        def init_session_state(): pass
 
 st.set_page_config(page_title="Stock Analyzer Pro", page_icon="📈", layout="wide")
 st.title("📊 Analyseur d'Actions - Niveau Institutionnel")
@@ -1950,6 +1991,11 @@ if analysis_mode == '📈 Analyse Fondamentale':
                 info = data['info']
                 hist = data['hist']
 
+                # Mettre à jour le contexte de l'assistant IA
+                if AI_ASSISTANT_AVAILABLE:
+                    init_ai_assistant()
+                    update_assistant_context(ticker, info, {"data": data})
+
                 st.subheader(f"🏢 {info.get('shortName', ticker)} ({ticker})")
 
                 if info.get('longBusinessSummary'):
@@ -2074,7 +2120,241 @@ elif analysis_mode == '🌱 Analyse ESG Pro':
             st.error(f"❌ Entreprise non trouvée")
 
 
+# ============ ASSISTANT IA (ALADDIN-LIKE) ============
+
+def init_ai_assistant():
+    """Initialise l'assistant IA dans la session."""
+    if "ai_assistant" not in st.session_state:
+        st.session_state.ai_assistant = MistralAssistant(
+            provider=AIProvider.OLLAMA,
+            model="mistral:latest"
+        )
+    if "chat_messages" not in st.session_state:
+        st.session_state.chat_messages = []
+    if "chat_open" not in st.session_state:
+        st.session_state.chat_open = False
+    if "current_company_context" not in st.session_state:
+        st.session_state.current_company_context = None
+
+
+def update_assistant_context(ticker: str, info: dict, data: dict = None):
+    """Met à jour le contexte de l'assistant avec les données de l'entreprise."""
+    if not AI_ASSISTANT_AVAILABLE:
+        return
+
+    context = format_financial_context(info, data)
+
+    # Ajouter les données supplémentaires
+    if data:
+        if "dcf_results" in data:
+            context["dcf_results"] = data["dcf_results"]
+
+    st.session_state.ai_assistant.set_context(context)
+    st.session_state.current_company_context = context
+
+
+def render_chat_panel():
+    """Affiche le panneau de chat latéral."""
+    if not AI_ASSISTANT_AVAILABLE:
+        return
+
+    # CSS pour le chat
+    st.markdown(get_assistant_css(), unsafe_allow_html=True)
+
+    # Bouton flottant pour ouvrir le chat
+    chat_button_html = """
+    <style>
+    .floating-chat-button {
+        position: fixed;
+        bottom: 30px;
+        right: 30px;
+        width: 65px;
+        height: 65px;
+        border-radius: 50%;
+        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        color: white;
+        border: none;
+        cursor: pointer;
+        box-shadow: 0 4px 20px rgba(102, 126, 234, 0.5);
+        z-index: 9999;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 28px;
+        transition: all 0.3s ease;
+    }
+    .floating-chat-button:hover {
+        transform: scale(1.1);
+        box-shadow: 0 6px 25px rgba(102, 126, 234, 0.7);
+    }
+    </style>
+    """
+    st.markdown(chat_button_html, unsafe_allow_html=True)
+
+
+def display_ai_chat_sidebar():
+    """Affiche l'interface de chat dans la sidebar ou un expander."""
+    if not AI_ASSISTANT_AVAILABLE:
+        return
+
+    init_ai_assistant()
+
+    # Créer une section dans le sidebar pour le chat
+    with st.sidebar:
+        st.markdown("---")
+        st.markdown("### 🤖 Assistant IA")
+
+        # Vérifier la disponibilité d'Ollama
+        assistant = st.session_state.ai_assistant
+        is_available = assistant.check_availability()
+
+        if not is_available:
+            st.warning("""
+            ⚠️ **Ollama non détecté**
+
+            Pour utiliser l'assistant IA :
+            1. Installez [Ollama](https://ollama.ai)
+            2. Lancez : `ollama run mistral`
+            3. Rafraîchissez la page
+            """)
+            return
+
+        st.success("✅ IA disponible")
+
+        # Contexte actuel
+        if st.session_state.current_company_context:
+            ctx = st.session_state.current_company_context
+            st.caption(f"📊 Analyse: **{ctx.get('name', 'N/A')}**")
+
+        # Zone de chat dans un expander
+        with st.expander("💬 Ouvrir le chat", expanded=False):
+            # Afficher les messages
+            chat_container = st.container()
+
+            with chat_container:
+                # Message de bienvenue si pas de messages
+                if not st.session_state.chat_messages:
+                    welcome = assistant.get_welcome_message()
+                    st.markdown(f"""
+                    <div style="background: #2d2d44; padding: 15px; border-radius: 10px; margin-bottom: 10px;">
+                    {welcome}
+                    </div>
+                    """, unsafe_allow_html=True)
+
+                # Afficher l'historique des messages
+                for msg in st.session_state.chat_messages:
+                    if msg["role"] == "user":
+                        st.markdown(f"""
+                        <div style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+                                    color: white; padding: 10px 15px; border-radius: 15px;
+                                    margin: 5px 0; margin-left: 20%; text-align: right;">
+                        {msg["content"]}
+                        </div>
+                        """, unsafe_allow_html=True)
+                    else:
+                        st.markdown(f"""
+                        <div style="background: #2d2d44; color: #e0e0e0;
+                                    padding: 10px 15px; border-radius: 15px;
+                                    margin: 5px 0; margin-right: 20%;">
+                        {msg["content"]}
+                        </div>
+                        """, unsafe_allow_html=True)
+
+            # Zone de saisie
+            user_input = st.text_input(
+                "Message",
+                key="chat_input",
+                placeholder="Posez votre question...",
+                label_visibility="collapsed"
+            )
+
+            col1, col2 = st.columns([3, 1])
+            with col1:
+                send_btn = st.button("📤 Envoyer", use_container_width=True)
+            with col2:
+                clear_btn = st.button("🗑️", help="Effacer l'historique")
+
+            if clear_btn:
+                st.session_state.chat_messages = []
+                assistant.clear_history()
+                st.rerun()
+
+            if send_btn and user_input:
+                # Ajouter le message utilisateur
+                st.session_state.chat_messages.append({
+                    "role": "user",
+                    "content": user_input
+                })
+
+                # Obtenir la réponse de l'IA
+                with st.spinner("🤔 Réflexion..."):
+                    response = ""
+                    for chunk in assistant.chat(user_input, stream=False):
+                        response += chunk
+
+                    st.session_state.chat_messages.append({
+                        "role": "assistant",
+                        "content": response
+                    })
+
+                st.rerun()
+
+        # Actions rapides
+        if QUICK_ACTIONS:
+            st.markdown("**⚡ Actions rapides**")
+
+            action_cols = st.columns(2)
+            for i, action in enumerate(QUICK_ACTIONS[:4]):
+                with action_cols[i % 2]:
+                    if st.button(action["label"], key=f"quick_{action['id']}", use_container_width=True):
+                        # Exécuter l'action
+                        st.session_state.chat_messages.append({
+                            "role": "user",
+                            "content": action["prompt"]
+                        })
+                        with st.spinner("🤔 Analyse..."):
+                            response = ""
+                            for chunk in assistant.chat(action["prompt"], stream=False):
+                                response += chunk
+                            st.session_state.chat_messages.append({
+                                "role": "assistant",
+                                "content": response
+                            })
+                        st.rerun()
+
+        # Génération de rapports
+        with st.expander("📄 Générer un rapport"):
+            report_type = st.selectbox(
+                "Type de rapport",
+                options=[r["id"] for r in REPORT_TYPES],
+                format_func=lambda x: next((r["label"] for r in REPORT_TYPES if r["id"] == x), x),
+                label_visibility="collapsed"
+            )
+
+            if st.button("📝 Générer", use_container_width=True):
+                report_info = next((r for r in REPORT_TYPES if r["id"] == report_type), None)
+                if report_info:
+                    with st.spinner("📝 Génération du rapport..."):
+                        response = ""
+                        for chunk in assistant.chat(report_info["prompt"], stream=False):
+                            response += chunk
+                        st.session_state.chat_messages.append({
+                            "role": "user",
+                            "content": f"[Génération rapport: {report_info['label']}]"
+                        })
+                        st.session_state.chat_messages.append({
+                            "role": "assistant",
+                            "content": response
+                        })
+                    st.rerun()
+
+
+# Afficher l'interface de chat dans la sidebar
+if AI_ASSISTANT_AVAILABLE:
+    display_ai_chat_sidebar()
+
+
 # ============ FOOTER ============
 
 st.markdown("---")
-st.caption("📊 Stock Analyzer Pro v8.0 - Données: Yahoo Finance | 🦢 Cygne Noir | Indicateurs Techniques | DCF Amélioré | Module Interactif | ESG Intégré")
+st.caption("📊 Stock Analyzer Pro v8.0 - Données: Yahoo Finance | 🦢 Cygne Noir | 🤖 Assistant IA | Indicateurs Techniques | DCF | ESG")
