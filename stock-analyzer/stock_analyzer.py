@@ -1,6 +1,6 @@
 """
-Stock Analyzer Pro v8.0 - Version Complète avec Analyse Cygne Noir + Assistant IA
-Analyse ESG + Fondamentale Avancée + Historique 10 ans + DCF + Indicateurs Techniques + Black Swan + ALADDIN-Like AI
+Stock Analyzer Pro v9.0 - Version Complète avec Analyse Comparative
+Analyse ESG + Fondamentale Avancée + Historique 10 ans + DCF + Indicateurs Techniques + Black Swan + ALADDIN-Like AI + Analyse Comparative
 """
 
 import streamlit as st
@@ -95,6 +95,23 @@ except ImportError:
     class StreamlitChatUI:
         @staticmethod
         def init_session_state(): pass
+
+# Gestion du module Analyse Comparative
+try:
+    from comparative_analysis import (
+        ComparativeAnalysis,
+        render_comparative_analysis_tab,
+        PERIODS_CONFIG as COMPARATIVE_PERIODS,
+        RatioCategory
+    )
+    COMPARATIVE_AVAILABLE = True
+except ImportError:
+    COMPARATIVE_AVAILABLE = False
+
+    def render_comparative_analysis_tab(current_ticker=None):
+        import streamlit as st
+        st.error("❌ Module d'analyse comparative non disponible.")
+        st.info("Vérifiez que le fichier `comparative_analysis.py` est présent.")
 
 st.set_page_config(page_title="Stock Analyzer Pro", page_icon="📈", layout="wide")
 st.title("📊 Analyseur d'Actions - Niveau Institutionnel")
@@ -2008,10 +2025,15 @@ if "analysis_company" not in st.session_state:
 
 with st.sidebar:
     st.header("⚙️ Paramètres")
-    analysis_mode = st.radio("Mode", ['📈 Analyse Fondamentale', '🌱 Analyse ESG Pro'], index=0)
+    analysis_mode = st.radio("Mode", ['📈 Analyse Fondamentale', '🌱 Analyse ESG Pro', '📊 Analyse Comparative'], index=0)
     st.markdown("---")
 
-    company_name = st.text_input("Entreprise", value="Apple" if analysis_mode == '📈 Analyse Fondamentale' else "TotalEnergies")
+    # Afficher le champ entreprise uniquement pour les modes qui en ont besoin
+    if analysis_mode != '📊 Analyse Comparative':
+        company_name = st.text_input("Entreprise", value="Apple" if analysis_mode == '📈 Analyse Fondamentale' else "TotalEnergies")
+    else:
+        company_name = ""
+        st.info("💡 La sélection des entreprises se fait dans le module de comparaison.")
 
     st.markdown("---")
     analyze_button = st.button("🔍 Analyser", type="primary", use_container_width=True)
@@ -2031,6 +2053,20 @@ with st.sidebar:
         - Sélecteur de période (1J à Max)
         - Indicateurs techniques
         - DCF amélioré
+        """)
+
+    elif analysis_mode == '📊 Analyse Comparative':
+        st.markdown("---")
+        st.markdown("### 📊 Fonctionnalités")
+        st.caption("""
+        **🆕 Analyse Comparative:**
+        - Comparez jusqu'à 4 entreprises
+        - Performance relative (base 100)
+        - Ratios financiers comparés
+        - Radar chart multi-critères
+        - Scorecard avec classement
+        - Historique des bénéfices
+        - Export CSV disponible
         """)
 
 
@@ -2193,6 +2229,21 @@ elif analysis_mode == '🌱 Analyse ESG Pro':
                     st.info(f"→ {rec}")
         else:
             st.error(f"❌ Entreprise non trouvée")
+
+
+# ============ ANALYSE COMPARATIVE ============
+
+elif analysis_mode == '📊 Analyse Comparative':
+    st.header("📊 Analyse Comparative")
+
+    # Appeler la fonction de rendu du module comparative_analysis
+    if COMPARATIVE_AVAILABLE:
+        # Passer le ticker actuel s'il existe
+        current_ticker = st.session_state.get('analysis_ticker')
+        render_comparative_analysis_tab(current_ticker)
+    else:
+        st.error("❌ Module d'analyse comparative non disponible.")
+        st.info("Vérifiez que le fichier `comparative_analysis.py` est présent dans le dossier du projet.")
 
 
 # ============ ASSISTANT IA (ALADDIN-LIKE) - UI ============
@@ -2417,4 +2468,4 @@ if AI_ASSISTANT_AVAILABLE:
 # ============ FOOTER ============
 
 st.markdown("---")
-st.caption("📊 Stock Analyzer Pro v8.0 - Données: Yahoo Finance | 🦢 Cygne Noir | 🤖 Assistant IA | Indicateurs Techniques | DCF | ESG")
+st.caption("📊 Stock Analyzer Pro v9.0 - Données: Yahoo Finance | 🦢 Cygne Noir | 🤖 Assistant IA | 📊 Analyse Comparative | Indicateurs Techniques | DCF | ESG")
