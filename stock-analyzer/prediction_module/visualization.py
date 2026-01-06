@@ -426,8 +426,7 @@ def plot_garch_volatility(
     fig.update_layout(
         **chart_config.layout_defaults,
         title=f"Analyse GARCH - {garch.model_type}({garch.order[0]},{garch.order[1]})",
-        height=600,
-        showlegend=True
+        height=600
     )
 
     fig.update_yaxes(title_text="Rendement (%)", row=1, col=1)
