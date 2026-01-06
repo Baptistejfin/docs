@@ -1,6 +1,6 @@
 """
-Stock Analyzer Pro v10.0 - Version Complète avec Prévision d'Actions
-Analyse ESG + Fondamentale Avancée + Historique 10 ans + DCF + Indicateurs Techniques + Black Swan + ALADDIN-Like AI + Analyse Comparative + Prévision Monte Carlo/ARIMA/GARCH/Sentiment
+Stock Analyzer Pro v11.0 - Version Complète avec Suivi Portefeuille
+Analyse ESG + Fondamentale Avancée + Historique 10 ans + DCF + Indicateurs Techniques + Black Swan + ALADDIN-Like AI + Analyse Comparative + Prévision + Portefeuille Trade Republic
 """
 
 import streamlit as st
@@ -129,6 +129,26 @@ except ImportError:
         pip install pmdarima arch transformers torch vaderSentiment
         ```
         Vérifiez que le dossier `prediction_module/` est présent.
+        """)
+
+# Gestion du module Portfolio (Trade Republic)
+try:
+    from portfolio_module.streamlit_ui import render_portfolio_tab
+    PORTFOLIO_AVAILABLE = True
+except ImportError:
+    PORTFOLIO_AVAILABLE = False
+
+    def render_portfolio_tab(current_ticker=None):
+        import streamlit as st
+        st.error("❌ Module Portfolio non disponible.")
+        st.info("""
+        **Installation requise:**
+        Vérifiez que le dossier `portfolio_module/` est présent.
+
+        Pour la connexion Trade Republic (optionnel):
+        ```bash
+        pip install pytr
+        ```
         """)
 
 st.set_page_config(page_title="Stock Analyzer Pro", page_icon="📈", layout="wide")
@@ -2043,18 +2063,21 @@ if "analysis_company" not in st.session_state:
 
 with st.sidebar:
     st.header("⚙️ Paramètres")
-    analysis_mode = st.radio("Mode", ['📈 Analyse Fondamentale', '🌱 Analyse ESG Pro', '📊 Analyse Comparative', '🎯 Prévision d\'Actions'], index=0)
+    analysis_mode = st.radio("Mode", ['📈 Analyse Fondamentale', '🌱 Analyse ESG Pro', '📊 Analyse Comparative', '🎯 Prévision d\'Actions', '💼 Mon Portefeuille'], index=0)
     st.markdown("---")
 
     # Afficher le champ entreprise uniquement pour les modes qui en ont besoin
-    if analysis_mode not in ['📊 Analyse Comparative', '🎯 Prévision d\'Actions']:
+    if analysis_mode not in ['📊 Analyse Comparative', '🎯 Prévision d\'Actions', '💼 Mon Portefeuille']:
         company_name = st.text_input("Entreprise", value="Apple" if analysis_mode == '📈 Analyse Fondamentale' else "TotalEnergies")
     elif analysis_mode == '📊 Analyse Comparative':
         company_name = ""
         st.info("💡 La sélection des entreprises se fait dans le module de comparaison.")
-    else:
+    elif analysis_mode == '🎯 Prévision d\'Actions':
         company_name = ""
         st.info("💡 La sélection du ticker se fait dans le module de prévision.")
+    else:
+        company_name = ""
+        st.info("💡 Gérez votre portefeuille Trade Republic directement dans l'onglet.")
 
     st.markdown("---")
     analyze_button = st.button("🔍 Analyser", type="primary", use_container_width=True)
@@ -2103,6 +2126,21 @@ with st.sidebar:
         - VaR et CVaR
         - Intervalles de confiance
         - Signal ACHAT/VENTE
+        """)
+
+    elif analysis_mode == '💼 Mon Portefeuille':
+        st.markdown("---")
+        st.markdown("### 💼 Fonctionnalités")
+        st.caption("""
+        **🆕 Suivi Portefeuille:**
+        - Import Trade Republic (CSV)
+        - Saisie manuelle des positions
+        - Cours en temps réel
+        - Performance globale/individuelle
+        - Alertes positions en baisse
+        - Recommandations d'investissement
+        - Analyse de concentration
+        - Export des données
         """)
 
 
@@ -2297,6 +2335,24 @@ elif analysis_mode == '🎯 Prévision d\'Actions':
         pip install pmdarima arch transformers torch vaderSentiment newsapi-python
         ```
         Vérifiez que le dossier `prediction_module/` est présent.
+        """)
+
+
+# ============ MON PORTEFEUILLE ============
+
+elif analysis_mode == '💼 Mon Portefeuille':
+    # Appeler la fonction de rendu du module portfolio
+    if PORTFOLIO_AVAILABLE:
+        render_portfolio_tab()
+    else:
+        st.error("❌ Module Portfolio non disponible.")
+        st.info("""
+        Vérifiez que le dossier `portfolio_module/` est présent.
+
+        **Pour la connexion Trade Republic (optionnel):**
+        ```bash
+        pip install pytr
+        ```
         """)
 
 
