@@ -1,6 +1,6 @@
 """
-Stock Analyzer Pro v9.0 - Version Complète avec Analyse Comparative
-Analyse ESG + Fondamentale Avancée + Historique 10 ans + DCF + Indicateurs Techniques + Black Swan + ALADDIN-Like AI + Analyse Comparative
+Stock Analyzer Pro v10.0 - Version Complète avec Prévision d'Actions
+Analyse ESG + Fondamentale Avancée + Historique 10 ans + DCF + Indicateurs Techniques + Black Swan + ALADDIN-Like AI + Analyse Comparative + Prévision Monte Carlo/ARIMA/GARCH/Sentiment
 """
 
 import streamlit as st
@@ -112,6 +112,24 @@ except ImportError:
         import streamlit as st
         st.error("❌ Module d'analyse comparative non disponible.")
         st.info("Vérifiez que le fichier `comparative_analysis.py` est présent.")
+
+# Gestion du module Prévision d'Actions
+try:
+    from prediction_module.streamlit_ui import render_prediction_tab
+    PREDICTION_AVAILABLE = True
+except ImportError:
+    PREDICTION_AVAILABLE = False
+
+    def render_prediction_tab(current_ticker=None):
+        import streamlit as st
+        st.error("❌ Module de prévision non disponible.")
+        st.info("""
+        **Installation requise:**
+        ```bash
+        pip install pmdarima arch transformers torch vaderSentiment
+        ```
+        Vérifiez que le dossier `prediction_module/` est présent.
+        """)
 
 st.set_page_config(page_title="Stock Analyzer Pro", page_icon="📈", layout="wide")
 st.title("📊 Analyseur d'Actions - Niveau Institutionnel")
@@ -2025,15 +2043,18 @@ if "analysis_company" not in st.session_state:
 
 with st.sidebar:
     st.header("⚙️ Paramètres")
-    analysis_mode = st.radio("Mode", ['📈 Analyse Fondamentale', '🌱 Analyse ESG Pro', '📊 Analyse Comparative'], index=0)
+    analysis_mode = st.radio("Mode", ['📈 Analyse Fondamentale', '🌱 Analyse ESG Pro', '📊 Analyse Comparative', '🎯 Prévision d\'Actions'], index=0)
     st.markdown("---")
 
     # Afficher le champ entreprise uniquement pour les modes qui en ont besoin
-    if analysis_mode != '📊 Analyse Comparative':
+    if analysis_mode not in ['📊 Analyse Comparative', '🎯 Prévision d\'Actions']:
         company_name = st.text_input("Entreprise", value="Apple" if analysis_mode == '📈 Analyse Fondamentale' else "TotalEnergies")
-    else:
+    elif analysis_mode == '📊 Analyse Comparative':
         company_name = ""
         st.info("💡 La sélection des entreprises se fait dans le module de comparaison.")
+    else:
+        company_name = ""
+        st.info("💡 La sélection du ticker se fait dans le module de prévision.")
 
     st.markdown("---")
     analyze_button = st.button("🔍 Analyser", type="primary", use_container_width=True)
@@ -2067,6 +2088,21 @@ with st.sidebar:
         - Scorecard avec classement
         - Historique des bénéfices
         - Export CSV disponible
+        """)
+
+    elif analysis_mode == '🎯 Prévision d\'Actions':
+        st.markdown("---")
+        st.markdown("### 🎯 Fonctionnalités")
+        st.caption("""
+        **🆕 Prévision d'Actions:**
+        - Simulation Monte Carlo (10,000+)
+        - Modèle ARIMA auto-calibré
+        - Volatilité GARCH
+        - Analyse sentiment actualités
+        - Agrégation probabiliste
+        - VaR et CVaR
+        - Intervalles de confiance
+        - Signal ACHAT/VENTE
         """)
 
 
@@ -2244,6 +2280,24 @@ elif analysis_mode == '📊 Analyse Comparative':
     else:
         st.error("❌ Module d'analyse comparative non disponible.")
         st.info("Vérifiez que le fichier `comparative_analysis.py` est présent dans le dossier du projet.")
+
+
+# ============ PRÉVISION D'ACTIONS ============
+
+elif analysis_mode == '🎯 Prévision d\'Actions':
+    # Appeler la fonction de rendu du module prediction
+    if PREDICTION_AVAILABLE:
+        current_ticker = st.session_state.get('analysis_ticker')
+        render_prediction_tab(current_ticker)
+    else:
+        st.error("❌ Module de prévision non disponible.")
+        st.info("""
+        **Installation requise:**
+        ```bash
+        pip install pmdarima arch transformers torch vaderSentiment newsapi-python
+        ```
+        Vérifiez que le dossier `prediction_module/` est présent.
+        """)
 
 
 # ============ ASSISTANT IA (ALADDIN-LIKE) - UI ============
