@@ -13,6 +13,8 @@ from plotly.subplots import make_subplots
 from typing import Optional, Dict, Any, List
 from datetime import datetime
 import json
+import tempfile
+import os
 
 from .trade_republic import TradeRepublicClient, Portfolio, Position, create_sample_portfolio
 from .analytics import PortfolioAnalyzer, PerformanceMetrics, AllocationAnalysis
@@ -198,21 +200,27 @@ def render_csv_import():
             uploaded_file.seek(0)
 
             if st.button("📥 Importer le portefeuille", type="primary"):
-                # Save temporarily
-                with open("/tmp/portfolio_import.csv", "wb") as f:
-                    f.write(uploaded_file.getvalue())
+                # Save to temporary file (cross-platform)
+                with tempfile.NamedTemporaryFile(mode='wb', suffix='.csv', delete=False) as tmp_file:
+                    tmp_file.write(uploaded_file.getvalue())
+                    tmp_path = tmp_file.name
 
-                with st.spinner("Import en cours..."):
-                    client = st.session_state.portfolio_client
-                    portfolio = client.import_from_csv("/tmp/portfolio_import.csv")
+                try:
+                    with st.spinner("Import en cours..."):
+                        client = st.session_state.portfolio_client
+                        portfolio = client.import_from_csv(tmp_path)
 
-                    if portfolio:
-                        st.session_state.portfolio = portfolio
-                        st.session_state.portfolio_last_refresh = datetime.now()
-                        st.success(f"✅ {len(portfolio.positions)} positions importées!")
-                        st.rerun()
-                    else:
-                        st.error("❌ Erreur lors de l'import. Vérifiez le format du fichier.")
+                        if portfolio:
+                            st.session_state.portfolio = portfolio
+                            st.session_state.portfolio_last_refresh = datetime.now()
+                            st.success(f"✅ {len(portfolio.positions)} positions importées!")
+                            st.rerun()
+                        else:
+                            st.error("❌ Erreur lors de l'import. Vérifiez le format du fichier.")
+                finally:
+                    # Clean up temp file
+                    if os.path.exists(tmp_path):
+                        os.unlink(tmp_path)
 
         except Exception as e:
             st.error(f"❌ Erreur de lecture: {e}")
@@ -234,20 +242,27 @@ def render_load_portfolio():
             st.json(data)
 
             if st.button("📥 Charger le portefeuille", type="primary"):
-                # Save temporarily
-                with open("/tmp/portfolio_load.json", "w") as f:
-                    json.dump(data, f)
+                # Save to temporary file (cross-platform)
+                with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False, encoding='utf-8') as tmp_file:
+                    json.dump(data, tmp_file)
+                    tmp_path = tmp_file.name
 
-                client = st.session_state.portfolio_client
-                portfolio = client.load_portfolio("/tmp/portfolio_load.json")
+                try:
+                    client = st.session_state.portfolio_client
+                    portfolio = client.load_portfolio(tmp_path)
 
-                if portfolio:
-                    # Refresh prices
-                    portfolio = client.refresh_prices(portfolio)
-                    st.session_state.portfolio = portfolio
-                    st.session_state.portfolio_last_refresh = datetime.now()
-                    st.success("✅ Portefeuille chargé et mis à jour!")
-                    st.rerun()
+                    if portfolio:
+                        # Refresh prices
+                        with st.spinner("Actualisation des cours..."):
+                            portfolio = client.refresh_prices(portfolio)
+                        st.session_state.portfolio = portfolio
+                        st.session_state.portfolio_last_refresh = datetime.now()
+                        st.success("✅ Portefeuille chargé et mis à jour!")
+                        st.rerun()
+                finally:
+                    # Clean up temp file
+                    if os.path.exists(tmp_path):
+                        os.unlink(tmp_path)
 
         except Exception as e:
             st.error(f"❌ Erreur: {e}")
