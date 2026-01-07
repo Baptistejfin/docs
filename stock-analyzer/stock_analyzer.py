@@ -183,6 +183,46 @@ def get_stock_data_full(ticker: str, period: str = '10y'):
         quarterly_cashflow = tkr.quarterly_cashflow
         income_stmt = tkr.income_stmt
 
+        # Données d'actionnariat
+        institutional_holders = None
+        mutualfund_holders = None
+        insider_transactions = None
+        insider_roster = None
+
+        try:
+            institutional_holders = tkr.institutional_holders
+        except Exception:
+            pass
+
+        try:
+            mutualfund_holders = tkr.mutualfund_holders
+        except Exception:
+            pass
+
+        try:
+            insider_transactions = tkr.insider_transactions
+        except Exception:
+            pass
+
+        try:
+            insider_roster = tkr.insider_roster_holders
+        except Exception:
+            pass
+
+        # Recommandations analystes
+        recommendations = None
+        recommendations_summary = None
+
+        try:
+            recommendations = tkr.recommendations
+        except Exception:
+            pass
+
+        try:
+            recommendations_summary = tkr.recommendations_summary
+        except Exception:
+            pass
+
         return {
             'info': info,
             'hist': hist,
@@ -193,6 +233,14 @@ def get_stock_data_full(ticker: str, period: str = '10y'):
             'cashflow': cashflow,
             'quarterly_cashflow': quarterly_cashflow,
             'income_stmt': income_stmt,
+            # Actionnariat
+            'institutional_holders': institutional_holders,
+            'mutualfund_holders': mutualfund_holders,
+            'insider_transactions': insider_transactions,
+            'insider_roster': insider_roster,
+            # Analystes
+            'recommendations': recommendations,
+            'recommendations_summary': recommendations_summary,
         }
     except Exception as e:
         st.error(f"Erreur: {e}")
@@ -1591,6 +1639,445 @@ def display_black_swan_section(ticker: str, info: dict):
         """)
 
 
+# ============ ACTIONNARIAT ============
+
+def display_ownership_section(data, info):
+    """Affiche les données d'actionnariat (institutionnels, insiders)."""
+    st.markdown("### 👥 Structure de l'Actionnariat")
+
+    # Pourcentages globaux
+    pct_institutions = info.get('heldPercentInstitutions')
+    pct_insiders = info.get('heldPercentInsiders')
+    float_shares = info.get('floatShares')
+    shares_outstanding = info.get('sharesOutstanding')
+
+    col1, col2, col3, col4 = st.columns(4)
+
+    with col1:
+        if pct_institutions:
+            st.metric("🏦 Institutionnels", f"{pct_institutions*100:.1f}%")
+        else:
+            st.metric("🏦 Institutionnels", "N/A")
+
+    with col2:
+        if pct_insiders:
+            st.metric("👔 Insiders", f"{pct_insiders*100:.1f}%")
+        else:
+            st.metric("👔 Insiders", "N/A")
+
+    with col3:
+        if float_shares:
+            st.metric("📊 Flottant", format_value(float_shares))
+        else:
+            st.metric("📊 Flottant", "N/A")
+
+    with col4:
+        if shares_outstanding:
+            st.metric("📈 Actions en circulation", format_value(shares_outstanding))
+        else:
+            st.metric("📈 Actions en circulation", "N/A")
+
+    st.markdown("---")
+
+    # Graphique de répartition
+    if pct_institutions or pct_insiders:
+        other_pct = 1 - (pct_institutions or 0) - (pct_insiders or 0)
+        if other_pct < 0:
+            other_pct = 0
+
+        fig_pie = go.Figure(data=[go.Pie(
+            labels=['Institutionnels', 'Insiders', 'Autres'],
+            values=[
+                (pct_institutions or 0) * 100,
+                (pct_insiders or 0) * 100,
+                other_pct * 100
+            ],
+            hole=0.4,
+            marker_colors=['#3498db', '#e74c3c', '#95a5a6'],
+            textinfo='label+percent',
+            textposition='outside'
+        )])
+        fig_pie.update_layout(
+            title="Répartition de l'actionnariat",
+            height=350,
+            showlegend=False
+        )
+        st.plotly_chart(fig_pie, use_container_width=True)
+
+    col_left, col_right = st.columns(2)
+
+    # Actionnaires institutionnels
+    with col_left:
+        st.markdown("#### 🏦 Top Actionnaires Institutionnels")
+        inst_holders = data.get('institutional_holders')
+
+        if inst_holders is not None and not inst_holders.empty:
+            # Formater le DataFrame
+            display_df = inst_holders.copy()
+            if 'Shares' in display_df.columns:
+                display_df['Shares'] = display_df['Shares'].apply(lambda x: f"{x:,.0f}" if pd.notna(x) else "N/A")
+            if 'Value' in display_df.columns:
+                display_df['Value'] = display_df['Value'].apply(lambda x: f"${x/1e6:,.1f}M" if pd.notna(x) else "N/A")
+            if 'pctHeld' in display_df.columns:
+                display_df['pctHeld'] = display_df['pctHeld'].apply(lambda x: f"{x*100:.2f}%" if pd.notna(x) else "N/A")
+                display_df = display_df.rename(columns={'pctHeld': '% Détenu'})
+            if 'Date Reported' in display_df.columns:
+                display_df['Date Reported'] = pd.to_datetime(display_df['Date Reported']).dt.strftime('%Y-%m-%d')
+
+            st.dataframe(display_df, use_container_width=True, hide_index=True)
+        else:
+            st.info("Données institutionnelles non disponibles")
+
+        # Fonds communs de placement
+        st.markdown("#### 📊 Top Fonds Communs de Placement")
+        mf_holders = data.get('mutualfund_holders')
+
+        if mf_holders is not None and not mf_holders.empty:
+            display_mf = mf_holders.copy()
+            if 'Shares' in display_mf.columns:
+                display_mf['Shares'] = display_mf['Shares'].apply(lambda x: f"{x:,.0f}" if pd.notna(x) else "N/A")
+            if 'Value' in display_mf.columns:
+                display_mf['Value'] = display_mf['Value'].apply(lambda x: f"${x/1e6:,.1f}M" if pd.notna(x) else "N/A")
+            if 'pctHeld' in display_mf.columns:
+                display_mf['pctHeld'] = display_mf['pctHeld'].apply(lambda x: f"{x*100:.2f}%" if pd.notna(x) else "N/A")
+                display_mf = display_mf.rename(columns={'pctHeld': '% Détenu'})
+
+            st.dataframe(display_mf.head(10), use_container_width=True, hide_index=True)
+        else:
+            st.info("Données des fonds non disponibles")
+
+    # Insiders
+    with col_right:
+        st.markdown("#### 👔 Dirigeants & Insiders")
+        insider_roster = data.get('insider_roster')
+
+        if insider_roster is not None and not insider_roster.empty:
+            display_roster = insider_roster.copy()
+            if 'Position' in display_roster.columns:
+                display_roster['Position'] = display_roster['Position'].fillna('N/A')
+            if 'Shares' in display_roster.columns:
+                display_roster['Shares'] = display_roster['Shares'].apply(lambda x: f"{x:,.0f}" if pd.notna(x) else "N/A")
+            if 'Latest Transaction' in display_roster.columns:
+                display_roster['Latest Transaction'] = display_roster['Latest Transaction'].fillna('N/A')
+
+            st.dataframe(display_roster, use_container_width=True, hide_index=True)
+        else:
+            st.info("Liste des insiders non disponible")
+
+        # Transactions insiders récentes
+        st.markdown("#### 📋 Transactions Insiders Récentes")
+        insider_tx = data.get('insider_transactions')
+
+        if insider_tx is not None and not insider_tx.empty:
+            display_tx = insider_tx.copy()
+
+            # Renommer les colonnes pour le français
+            col_rename = {
+                'Insider': 'Nom',
+                'Position': 'Poste',
+                'Shares': 'Actions',
+                'Value': 'Valeur',
+                'Transaction': 'Type',
+                'Start Date': 'Date'
+            }
+            display_tx = display_tx.rename(columns={k: v for k, v in col_rename.items() if k in display_tx.columns})
+
+            if 'Actions' in display_tx.columns:
+                display_tx['Actions'] = display_tx['Actions'].apply(lambda x: f"{x:,.0f}" if pd.notna(x) else "N/A")
+            if 'Valeur' in display_tx.columns:
+                display_tx['Valeur'] = display_tx['Valeur'].apply(lambda x: f"${x:,.0f}" if pd.notna(x) else "N/A")
+
+            # Colorer les transactions (achat = vert, vente = rouge)
+            st.dataframe(display_tx.head(15), use_container_width=True, hide_index=True)
+
+            # Résumé des transactions
+            if 'Text' in insider_tx.columns:
+                buy_count = insider_tx['Text'].str.contains('Buy|Purchase|Acquisition', case=False, na=False).sum()
+                sell_count = insider_tx['Text'].str.contains('Sell|Sale|Disposition', case=False, na=False).sum()
+
+                st.markdown(f"""
+                **Résumé des transactions récentes:**
+                - 🟢 Achats: {buy_count}
+                - 🔴 Ventes: {sell_count}
+                """)
+        else:
+            st.info("Transactions insiders non disponibles")
+
+    # Avertissements sur les données
+    with st.expander("⚠️ Limitations des données d'actionnariat"):
+        st.markdown("""
+        **Sources et limites:**
+        - Les données proviennent des déclarations SEC (Form 13F) pour les US
+        - Mise à jour trimestrielle avec un délai de ~45 jours
+        - Seules les institutions gérant > $100M doivent déclarer
+        - Les participations < 5% peuvent ne pas apparaître
+        - Pas de distinction entre banques, assureurs, fonds souverains
+        - Pas d'historique de l'évolution de l'actionnariat
+        """)
+
+
+# ============ AVIS DES ANALYSTES ============
+
+def display_analyst_section(data, info):
+    """Affiche les recommandations et objectifs des analystes."""
+    st.markdown("### 📊 Avis des Analystes")
+
+    # Données de base depuis info
+    target_high = info.get('targetHighPrice')
+    target_low = info.get('targetLowPrice')
+    target_mean = info.get('targetMeanPrice')
+    target_median = info.get('targetMedianPrice')
+    current_price = info.get('regularMarketPrice', info.get('currentPrice', 0))
+    recommendation = info.get('recommendationKey', '').upper()
+    recommendation_mean = info.get('recommendationMean')
+    num_analysts = info.get('numberOfAnalystOpinions', 0)
+
+    # Métriques principales
+    col1, col2, col3, col4 = st.columns(4)
+
+    with col1:
+        if recommendation:
+            rec_colors = {
+                'STRONG_BUY': '🟢',
+                'BUY': '🟢',
+                'HOLD': '🟡',
+                'SELL': '🔴',
+                'STRONG_SELL': '🔴',
+                'UNDERPERFORM': '🔴',
+                'OUTPERFORM': '🟢'
+            }
+            rec_fr = {
+                'STRONG_BUY': 'ACHAT FORT',
+                'BUY': 'ACHAT',
+                'HOLD': 'CONSERVER',
+                'SELL': 'VENTE',
+                'STRONG_SELL': 'VENTE FORTE',
+                'UNDERPERFORM': 'SOUS-PERFORMER',
+                'OUTPERFORM': 'SURPERFORMER'
+            }
+            emoji = rec_colors.get(recommendation, '⚪')
+            label = rec_fr.get(recommendation, recommendation)
+            st.metric("Consensus", f"{emoji} {label}")
+        else:
+            st.metric("Consensus", "N/A")
+
+    with col2:
+        if recommendation_mean:
+            # 1 = Strong Buy, 5 = Strong Sell
+            st.metric("Score moyen", f"{recommendation_mean:.2f} / 5")
+        else:
+            st.metric("Score moyen", "N/A")
+
+    with col3:
+        st.metric("Nombre d'analystes", f"{num_analysts}")
+
+    with col4:
+        if target_mean and current_price:
+            upside = ((target_mean / current_price) - 1) * 100
+            st.metric("Potentiel", f"{upside:+.1f}%", delta=f"Cible: ${target_mean:.2f}")
+        else:
+            st.metric("Potentiel", "N/A")
+
+    st.markdown("---")
+
+    # Objectifs de prix
+    if target_mean or target_high or target_low:
+        st.markdown("#### 🎯 Objectifs de Prix")
+
+        col_chart, col_details = st.columns([2, 1])
+
+        with col_chart:
+            # Graphique des objectifs
+            fig = go.Figure()
+
+            # Barre de range (low to high)
+            if target_low and target_high:
+                fig.add_trace(go.Bar(
+                    x=[target_high - target_low],
+                    y=['Objectif'],
+                    orientation='h',
+                    base=target_low,
+                    marker_color='rgba(52, 152, 219, 0.3)',
+                    name='Range analystes',
+                    hovertemplate=f'Range: ${target_low:.2f} - ${target_high:.2f}<extra></extra>'
+                ))
+
+            # Prix actuel
+            if current_price:
+                fig.add_vline(
+                    x=current_price,
+                    line_dash="solid",
+                    line_color="#e74c3c",
+                    line_width=3,
+                    annotation_text=f"Prix actuel: ${current_price:.2f}",
+                    annotation_position="top"
+                )
+
+            # Objectif moyen
+            if target_mean:
+                fig.add_vline(
+                    x=target_mean,
+                    line_dash="dash",
+                    line_color="#2ecc71",
+                    line_width=2,
+                    annotation_text=f"Objectif moyen: ${target_mean:.2f}",
+                    annotation_position="bottom"
+                )
+
+            # Objectif médian
+            if target_median and target_median != target_mean:
+                fig.add_vline(
+                    x=target_median,
+                    line_dash="dot",
+                    line_color="#f1c40f",
+                    line_width=2
+                )
+
+            fig.update_layout(
+                title="Objectifs de prix des analystes",
+                xaxis_title="Prix ($)",
+                showlegend=False,
+                height=200,
+                margin=dict(t=50, b=30, l=50, r=50)
+            )
+
+            st.plotly_chart(fig, use_container_width=True)
+
+        with col_details:
+            st.markdown("**Détail des objectifs:**")
+            details_data = []
+            if target_high:
+                details_data.append({"Mesure": "🔺 Objectif haut", "Prix": f"${target_high:.2f}"})
+            if target_mean:
+                details_data.append({"Mesure": "📊 Objectif moyen", "Prix": f"${target_mean:.2f}"})
+            if target_median:
+                details_data.append({"Mesure": "📈 Objectif médian", "Prix": f"${target_median:.2f}"})
+            if target_low:
+                details_data.append({"Mesure": "🔻 Objectif bas", "Prix": f"${target_low:.2f}"})
+            if current_price:
+                details_data.append({"Mesure": "💰 Prix actuel", "Prix": f"${current_price:.2f}"})
+
+            if details_data:
+                st.dataframe(pd.DataFrame(details_data), use_container_width=True, hide_index=True)
+
+    # Historique des recommandations
+    st.markdown("#### 📅 Historique des Recommandations")
+
+    recommendations = data.get('recommendations')
+    recommendations_summary = data.get('recommendations_summary')
+
+    if recommendations_summary is not None and not recommendations_summary.empty:
+        # Graphique de répartition des recommandations
+        rec_sum = recommendations_summary
+
+        # Essayer différentes structures de données
+        if isinstance(rec_sum, pd.DataFrame):
+            if 'period' in rec_sum.columns:
+                # Nouvelle structure
+                fig_rec = go.Figure()
+
+                periods = rec_sum['period'].tolist() if 'period' in rec_sum.columns else rec_sum.index.tolist()
+
+                for col in ['strongBuy', 'buy', 'hold', 'sell', 'strongSell']:
+                    if col in rec_sum.columns:
+                        colors = {
+                            'strongBuy': '#27ae60',
+                            'buy': '#2ecc71',
+                            'hold': '#f1c40f',
+                            'sell': '#e74c3c',
+                            'strongSell': '#c0392b'
+                        }
+                        labels_fr = {
+                            'strongBuy': 'Achat Fort',
+                            'buy': 'Achat',
+                            'hold': 'Conserver',
+                            'sell': 'Vente',
+                            'strongSell': 'Vente Forte'
+                        }
+                        fig_rec.add_trace(go.Bar(
+                            x=periods,
+                            y=rec_sum[col],
+                            name=labels_fr.get(col, col),
+                            marker_color=colors.get(col, '#95a5a6')
+                        ))
+
+                fig_rec.update_layout(
+                    barmode='stack',
+                    title="Évolution des recommandations analystes",
+                    xaxis_title="Période",
+                    yaxis_title="Nombre d'analystes",
+                    height=400,
+                    legend=dict(orientation="h", yanchor="bottom", y=1.02)
+                )
+
+                st.plotly_chart(fig_rec, use_container_width=True)
+            else:
+                st.dataframe(rec_sum, use_container_width=True)
+
+    elif recommendations is not None and not recommendations.empty:
+        # Afficher l'historique brut des recommandations
+        display_rec = recommendations.copy()
+
+        # Renommer les colonnes
+        if 'Firm' in display_rec.columns:
+            display_rec = display_rec.rename(columns={
+                'Firm': 'Analyste',
+                'To Grade': 'Recommandation',
+                'From Grade': 'Précédente',
+                'Action': 'Action'
+            })
+
+        # Limiter aux 20 dernières
+        st.dataframe(display_rec.head(20), use_container_width=True, hide_index=True)
+    else:
+        st.info("Historique des recommandations non disponible")
+
+    # Jauge de consensus
+    if recommendation_mean:
+        st.markdown("#### 📊 Jauge de Consensus")
+
+        fig_gauge = go.Figure(go.Indicator(
+            mode="gauge+number",
+            value=recommendation_mean,
+            domain={'x': [0, 1], 'y': [0, 1]},
+            title={'text': "Score Consensus (1=Achat Fort, 5=Vente Forte)"},
+            gauge={
+                'axis': {'range': [1, 5], 'tickwidth': 1},
+                'bar': {'color': "darkblue"},
+                'bgcolor': "white",
+                'borderwidth': 2,
+                'bordercolor': "gray",
+                'steps': [
+                    {'range': [1, 1.5], 'color': '#27ae60'},
+                    {'range': [1.5, 2.5], 'color': '#2ecc71'},
+                    {'range': [2.5, 3.5], 'color': '#f1c40f'},
+                    {'range': [3.5, 4.5], 'color': '#e74c3c'},
+                    {'range': [4.5, 5], 'color': '#c0392b'}
+                ],
+                'threshold': {
+                    'line': {'color': "black", 'width': 4},
+                    'thickness': 0.75,
+                    'value': recommendation_mean
+                }
+            }
+        ))
+
+        fig_gauge.update_layout(height=300)
+        st.plotly_chart(fig_gauge, use_container_width=True)
+
+    # Avertissements
+    with st.expander("⚠️ Limitations des avis analystes"):
+        st.markdown("""
+        **À prendre en compte:**
+        - Les analystes peuvent avoir des conflits d'intérêts
+        - Les objectifs de prix sont souvent optimistes
+        - La couverture varie selon la taille de l'entreprise
+        - Les recommandations sont rarement "Vente" (biais positif)
+        - Les données peuvent avoir plusieurs semaines de retard
+        - Ne pas utiliser comme unique critère d'investissement
+        """)
+
+
 # ============ ANALYSE HISTORIQUE COMPLÈTE ============
 
 def display_historical_analysis(data, info, ticker=None):
@@ -1630,6 +2117,16 @@ def display_historical_analysis(data, info, ticker=None):
         with mod_col8:
             show_blackswan = st.checkbox("🦢 Cygne Noir", value=True)
 
+        mod_col9, mod_col10, mod_col11, mod_col12 = st.columns(4)
+        with mod_col9:
+            show_ownership = st.checkbox("👥 Actionnariat", value=True)
+        with mod_col10:
+            show_analysts = st.checkbox("📊 Analystes", value=True)
+        with mod_col11:
+            pass
+        with mod_col12:
+            pass
+
     # === ONGLETS DYNAMIQUES ===
     tabs_list = []
     tabs_names = []
@@ -1650,6 +2147,10 @@ def display_historical_analysis(data, info, ticker=None):
         tabs_names.append("📋 Free Form")
     if show_blackswan:
         tabs_names.append("🦢 Cygne Noir")
+    if show_ownership:
+        tabs_names.append("👥 Actionnariat")
+    if show_analysts:
+        tabs_names.append("📊 Analystes")
 
     if not tabs_names:
         st.info("Sélectionnez au moins un module à afficher")
@@ -1993,6 +2494,19 @@ def display_historical_analysis(data, info, ticker=None):
         with tabs[tab_idx]:
             # Utiliser le ticker passé en paramètre
             display_black_swan_section(ticker, info)
+        tab_idx += 1
+
+    # TAB: ACTIONNARIAT
+    if show_ownership:
+        with tabs[tab_idx]:
+            display_ownership_section(data, info)
+        tab_idx += 1
+
+    # TAB: ANALYSTES
+    if show_analysts:
+        with tabs[tab_idx]:
+            display_analyst_section(data, info)
+        tab_idx += 1
 
     # BONUS: Sélecteur d'années
     st.markdown("---")
