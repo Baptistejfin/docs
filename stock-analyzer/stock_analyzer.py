@@ -422,7 +422,7 @@ def display_price_chart_with_indicators(ticker, info, hist_full):
             show_bollinger = st.checkbox("Bollinger", value=False)
 
     # Options supplémentaires
-    col_opt1, col_opt2, col_opt3, col_opt4 = st.columns(4)
+    col_opt1, col_opt2, col_opt3, col_opt4, col_opt5 = st.columns(5)
 
     with col_opt1:
         show_volume = st.checkbox("Volume", value=True)
@@ -432,6 +432,18 @@ def display_price_chart_with_indicators(ticker, info, hist_full):
         show_stochastic = st.checkbox("Stochastique", value=False)
     with col_opt4:
         fullscreen = st.checkbox("🔍 Agrandir", value=False)
+    with col_opt5:
+        hide_gaps = st.checkbox("Masquer gaps", value=True, help="Masquer les trous (weekends, jours fériés)")
+
+    # Sélecteur de type de graphique
+    col_chart_type, col_spacer = st.columns([1, 4])
+    with col_chart_type:
+        chart_type = st.selectbox(
+            "Type de graphique",
+            options=["Chandelier", "Ligne", "Barres OHLC"],
+            index=0,
+            help="Chandelier japonais, ligne ou barres OHLC"
+        )
 
     # === RÉCUPÉRATION DES DONNÉES ===
     hist = get_stock_history(ticker, period, interval)
@@ -482,9 +494,9 @@ def display_price_chart_with_indicators(ticker, info, hist_full):
 
     current_row = 1
 
-    # === GRAPHIQUE PRINCIPAL (Candlestick ou Line) ===
-    if interval in ['1m', '5m', '15m', '1h']:
-        # Chandelier pour les intervalles courts
+    # === GRAPHIQUE PRINCIPAL (selon le type sélectionné) ===
+    if chart_type == "Chandelier":
+        # Chandelier japonais (Candlestick)
         fig.add_trace(
             go.Candlestick(
                 x=hist.index,
@@ -498,8 +510,23 @@ def display_price_chart_with_indicators(ticker, info, hist_full):
             ),
             row=1, col=1
         )
+    elif chart_type == "Barres OHLC":
+        # Barres OHLC
+        fig.add_trace(
+            go.Ohlc(
+                x=hist.index,
+                open=hist['Open'],
+                high=hist['High'],
+                low=hist['Low'],
+                close=hist['Close'],
+                name='Prix',
+                increasing_line_color='#2ecc71',
+                decreasing_line_color='#e74c3c'
+            ),
+            row=1, col=1
+        )
     else:
-        # Ligne pour les intervalles longs
+        # Ligne
         fig.add_trace(
             go.Scatter(
                 x=hist.index,
@@ -632,6 +659,25 @@ def display_price_chart_with_indicators(ticker, info, hist_full):
         ),
         margin=dict(l=50, r=50, t=80, b=50)
     )
+
+    # === MASQUER LES GAPS (weekends, jours fériés, heures de fermeture) ===
+    if hide_gaps:
+        # Définir les rangebreaks selon l'intervalle
+        if interval in ['1m', '5m', '15m', '30m', '1h']:
+            # Pour les intervalles intraday : masquer les nuits et weekends
+            fig.update_xaxes(
+                rangebreaks=[
+                    dict(bounds=["sat", "mon"]),  # Masquer weekends
+                    dict(bounds=[20, 9.5], pattern="hour"),  # Masquer heures de fermeture (20h-9h30)
+                ]
+            )
+        else:
+            # Pour les intervalles journaliers et plus : masquer uniquement les weekends
+            fig.update_xaxes(
+                rangebreaks=[
+                    dict(bounds=["sat", "mon"]),  # Masquer weekends
+                ]
+            )
 
     fig.update_yaxes(title_text="Prix ($)", row=1, col=1)
 
