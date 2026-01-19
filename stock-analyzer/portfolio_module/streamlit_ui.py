@@ -30,13 +30,50 @@ from .config import (
 )
 
 # ==============================================================================
+# CONFIGURATION PERSISTANCE
+# ==============================================================================
+
+# Chemin de sauvegarde automatique du portefeuille
+PORTFOLIO_AUTO_SAVE_PATH = os.path.join(os.path.expanduser("~"), ".stock_analyzer_portfolio.json")
+
+def auto_save_portfolio(portfolio: Portfolio) -> bool:
+    """Sauvegarde automatique du portefeuille."""
+    try:
+        client = TradeRepublicClient()
+        return client.save_portfolio(PORTFOLIO_AUTO_SAVE_PATH, portfolio)
+    except Exception as e:
+        print(f"Erreur sauvegarde auto: {e}")
+        return False
+
+def auto_load_portfolio() -> Optional[Portfolio]:
+    """Charge automatiquement le portefeuille sauvegardé s'il existe."""
+    if os.path.exists(PORTFOLIO_AUTO_SAVE_PATH):
+        try:
+            client = TradeRepublicClient()
+            return client.load_portfolio(PORTFOLIO_AUTO_SAVE_PATH)
+        except Exception as e:
+            print(f"Erreur chargement auto: {e}")
+    return None
+
+# ==============================================================================
 # SESSION STATE INITIALIZATION
 # ==============================================================================
 
 def init_portfolio_session_state():
     """Initialize session state for portfolio module."""
+    if "portfolio_initialized" not in st.session_state:
+        st.session_state.portfolio_initialized = False
+
     if "portfolio" not in st.session_state:
         st.session_state.portfolio = None
+
+    # Auto-load portfolio on first initialization
+    if not st.session_state.portfolio_initialized:
+        saved_portfolio = auto_load_portfolio()
+        if saved_portfolio:
+            st.session_state.portfolio = saved_portfolio
+        st.session_state.portfolio_initialized = True
+
     if "portfolio_client" not in st.session_state:
         st.session_state.portfolio_client = TradeRepublicClient()
     if "portfolio_alerts" not in st.session_state:
@@ -163,7 +200,9 @@ def render_manual_input():
                 portfolio = client.create_manual_portfolio(positions_data, cash_balance)
                 st.session_state.portfolio = portfolio
                 st.session_state.portfolio_last_refresh = datetime.now()
-                st.success(f"✅ Portefeuille créé avec {len(portfolio.positions)} positions!")
+                # Sauvegarde automatique
+                auto_save_portfolio(portfolio)
+                st.success(f"✅ Portefeuille créé et sauvegardé avec {len(portfolio.positions)} positions!")
                 st.rerun()
         else:
             st.warning("⚠️ Veuillez saisir au moins une position valide")
@@ -213,7 +252,9 @@ def render_csv_import():
                         if portfolio:
                             st.session_state.portfolio = portfolio
                             st.session_state.portfolio_last_refresh = datetime.now()
-                            st.success(f"✅ {len(portfolio.positions)} positions importées!")
+                            # Sauvegarde automatique
+                            auto_save_portfolio(portfolio)
+                            st.success(f"✅ {len(portfolio.positions)} positions importées et sauvegardées!")
                             st.rerun()
                         else:
                             st.error("❌ Erreur lors de l'import. Vérifiez le format du fichier.")
@@ -257,7 +298,9 @@ def render_load_portfolio():
                             portfolio = client.refresh_prices(portfolio)
                         st.session_state.portfolio = portfolio
                         st.session_state.portfolio_last_refresh = datetime.now()
-                        st.success("✅ Portefeuille chargé et mis à jour!")
+                        # Sauvegarde automatique
+                        auto_save_portfolio(portfolio)
+                        st.success("✅ Portefeuille chargé, mis à jour et sauvegardé!")
                         st.rerun()
                 finally:
                     # Clean up temp file
@@ -282,7 +325,9 @@ def render_demo_portfolio():
             portfolio = create_sample_portfolio()
             st.session_state.portfolio = portfolio
             st.session_state.portfolio_last_refresh = datetime.now()
-            st.success("✅ Portefeuille démo chargé!")
+            # Sauvegarde automatique
+            auto_save_portfolio(portfolio)
+            st.success("✅ Portefeuille démo chargé et sauvegardé!")
             st.rerun()
 
 
@@ -297,30 +342,47 @@ def render_portfolio_dashboard():
         return
 
     # Refresh button
-    col1, col2, col3 = st.columns([2, 1, 1])
+    col1, col2, col3, col4 = st.columns([2, 1, 1, 1])
     with col1:
-        st.markdown(f"**Dernière mise à jour:** {st.session_state.portfolio_last_refresh.strftime('%H:%M:%S') if st.session_state.portfolio_last_refresh else 'N/A'}")
+        if portfolio.creation_date:
+            days_since_creation = (datetime.now() - portfolio.creation_date).days
+            st.markdown(f"**Portefeuille créé il y a {days_since_creation} jour(s)** | Dernière MAJ: {st.session_state.portfolio_last_refresh.strftime('%H:%M:%S') if st.session_state.portfolio_last_refresh else 'N/A'}")
+        else:
+            st.markdown(f"**Dernière mise à jour:** {st.session_state.portfolio_last_refresh.strftime('%H:%M:%S') if st.session_state.portfolio_last_refresh else 'N/A'}")
     with col2:
         if st.button("🔄 Actualiser les cours"):
             with st.spinner("Mise à jour..."):
                 client = st.session_state.portfolio_client
                 portfolio = client.refresh_prices(portfolio)
+                # Enregistrer la valeur dans l'historique
+                portfolio.record_value()
                 st.session_state.portfolio = portfolio
                 st.session_state.portfolio_last_refresh = datetime.now()
+                # Sauvegarde automatique après actualisation
+                auto_save_portfolio(portfolio)
                 st.rerun()
     with col3:
-        if st.button("💾 Sauvegarder"):
+        if st.button("💾 Exporter JSON"):
             client = st.session_state.portfolio_client
-            client.save_portfolio("portfolio_backup.json", portfolio)
-            st.success("Portefeuille sauvegardé!")
+            client.save_portfolio("portfolio_export.json", portfolio)
+            st.success("Exporté vers portfolio_export.json!")
+    with col4:
+        if st.button("🗑️ Réinitialiser"):
+            if os.path.exists(PORTFOLIO_AUTO_SAVE_PATH):
+                os.remove(PORTFOLIO_AUTO_SAVE_PATH)
+            st.session_state.portfolio = None
+            st.session_state.portfolio_initialized = False
+            st.rerun()
 
     # Main metrics
     render_main_metrics(portfolio)
 
-    # Tabs
-    tab1, tab2, tab3, tab4, tab5 = st.tabs([
+    # Tabs - Ajout des nouveaux onglets
+    tab1, tab2, tab3, tab4, tab5, tab6, tab7 = st.tabs([
         "📊 Vue d'ensemble",
-        "📈 Positions",
+        "🌍 Répartition Géographique",
+        "📈 Performance Historique",
+        "📋 Positions",
         "⚠️ Alertes",
         "💡 Recommandations",
         "📉 Positions en baisse"
@@ -330,15 +392,21 @@ def render_portfolio_dashboard():
         render_overview_tab(portfolio)
 
     with tab2:
-        render_positions_tab(portfolio)
+        render_geographic_tab(portfolio)
 
     with tab3:
-        render_alerts_tab(portfolio)
+        render_performance_history_tab(portfolio)
 
     with tab4:
-        render_recommendations_tab(portfolio)
+        render_positions_tab(portfolio)
 
     with tab5:
+        render_alerts_tab(portfolio)
+
+    with tab6:
+        render_recommendations_tab(portfolio)
+
+    with tab7:
         render_declining_tab(portfolio)
 
 
@@ -399,9 +467,56 @@ def render_overview_tab(portfolio: Portfolio):
 
     with col1:
         st.markdown("### 🏢 Répartition sectorielle")
-        if allocation.by_sector:
+        if allocation.by_sector and any(v > 0 for v in allocation.by_sector.values()):
+            # Graphique en barres horizontales pour les secteurs
+            sectors = list(allocation.by_sector.keys())
+            values = list(allocation.by_sector.values())
+
+            # Trier par valeur décroissante
+            sorted_data = sorted(zip(sectors, values), key=lambda x: x[1], reverse=True)
+            sectors, values = zip(*sorted_data) if sorted_data else ([], [])
+
+            # Couleurs par secteur
+            sector_colors = {
+                'Technology': '#3498db',
+                'Financial Services': '#2ecc71',
+                'Healthcare': '#e74c3c',
+                'Consumer Cyclical': '#f39c12',
+                'Communication Services': '#9b59b6',
+                'Industrials': '#1abc9c',
+                'Consumer Defensive': '#34495e',
+                'Energy': '#e67e22',
+                'Utilities': '#95a5a6',
+                'Real Estate': '#d35400',
+                'Basic Materials': '#16a085',
+                'Non classé': '#bdc3c7'
+            }
+
+            colors = [sector_colors.get(s, '#7f8c8d') for s in sectors]
+
+            fig_sector = go.Figure(go.Bar(
+                x=values,
+                y=sectors,
+                orientation='h',
+                marker_color=colors,
+                text=[f"{v:.1f}%" for v in values],
+                textposition='outside'
+            ))
+            fig_sector.update_layout(
+                height=max(300, len(sectors) * 35),
+                margin=dict(t=20, b=20, l=120, r=40),
+                xaxis_title="Poids (%)",
+                yaxis=dict(autorange="reversed")
+            )
+            st.plotly_chart(fig_sector, use_container_width=True)
+
+            # Tableau détaillé
             sector_df = pd.DataFrame([
-                {"Secteur": k, "Poids (%)": v}
+                {
+                    "Secteur": k,
+                    "Poids (%)": f"{v:.1f}%",
+                    "Valeur (€)": f"{v * portfolio.total_value / 100:,.2f}"
+                }
                 for k, v in sorted(allocation.by_sector.items(), key=lambda x: x[1], reverse=True)
             ])
             st.dataframe(sector_df, use_container_width=True, hide_index=True)
@@ -410,12 +525,45 @@ def render_overview_tab(portfolio: Portfolio):
 
     with col2:
         st.markdown("### 📦 Type d'actifs")
-        if allocation.by_asset_type:
+        if allocation.by_asset_type and any(v > 0 for v in allocation.by_asset_type.values()):
+            # Graphique en camembert pour les types d'actifs
+            fig_type = go.Figure(data=[go.Pie(
+                labels=[k.upper() for k in allocation.by_asset_type.keys()],
+                values=list(allocation.by_asset_type.values()),
+                hole=0.4,
+                textinfo='label+percent',
+                marker_colors=['#3498db', '#2ecc71', '#f39c12', '#e74c3c']
+            )])
+            fig_type.update_layout(
+                height=250,
+                margin=dict(t=20, b=20, l=20, r=20),
+                showlegend=False
+            )
+            st.plotly_chart(fig_type, use_container_width=True)
+
             type_df = pd.DataFrame([
-                {"Type": k.upper(), "Poids (%)": f"{v:.1f}"}
+                {"Type": k.upper(), "Poids (%)": f"{v:.1f}%", "Valeur (€)": f"{v * portfolio.total_value / 100:,.2f}"}
                 for k, v in allocation.by_asset_type.items()
             ])
             st.dataframe(type_df, use_container_width=True, hide_index=True)
+        else:
+            st.info("Données non disponibles")
+
+        # Indice de concentration
+        st.markdown("### 📊 Concentration")
+        concentration = allocation.concentration
+        if concentration > 0.25:
+            conc_status = "🔴 Élevée"
+            conc_msg = "Portefeuille très concentré - risque élevé"
+        elif concentration > 0.15:
+            conc_status = "🟡 Modérée"
+            conc_msg = "Concentration acceptable"
+        else:
+            conc_status = "🟢 Faible"
+            conc_msg = "Bonne diversification"
+
+        st.metric("Indice HHI", f"{concentration:.4f}", help="Indice Herfindahl-Hirschman - plus il est bas, plus le portefeuille est diversifié")
+        st.markdown(f"**{conc_status}** - {conc_msg}")
 
 
 def render_positions_tab(portfolio: Portfolio):
@@ -623,6 +771,250 @@ def render_declining_tab(portfolio: Portfolio):
             """,
             unsafe_allow_html=True
         )
+
+
+# ==============================================================================
+# GEOGRAPHIC TAB
+# ==============================================================================
+
+def render_geographic_tab(portfolio: Portfolio):
+    """Affiche la répartition géographique du portefeuille."""
+    st.markdown("### 🌍 Répartition Géographique")
+
+    analyzer = PortfolioAnalyzer()
+    allocation = analyzer.analyze_allocation(portfolio)
+
+    col1, col2 = st.columns(2)
+
+    with col1:
+        # Répartition par région
+        st.markdown("#### 🗺️ Par Région")
+        if allocation.by_region and any(v > 0 for v in allocation.by_region.values()):
+            # Graphique en camembert pour les régions
+            fig_region = go.Figure(data=[go.Pie(
+                labels=list(allocation.by_region.keys()),
+                values=list(allocation.by_region.values()),
+                hole=0.4,
+                textinfo='label+percent',
+                marker_colors=px.colors.qualitative.Set2
+            )])
+            fig_region.update_layout(
+                height=350,
+                margin=dict(t=20, b=20, l=20, r=20),
+                showlegend=True,
+                legend=dict(orientation="h", yanchor="bottom", y=-0.2)
+            )
+            st.plotly_chart(fig_region, use_container_width=True)
+
+            # Tableau détaillé
+            region_df = pd.DataFrame([
+                {"Région": k, "Poids (%)": f"{v:.1f}%", "Valeur (€)": f"{v * portfolio.total_value / 100:,.2f}"}
+                for k, v in sorted(allocation.by_region.items(), key=lambda x: x[1], reverse=True)
+            ])
+            st.dataframe(region_df, use_container_width=True, hide_index=True)
+        else:
+            st.info("Données régionales non disponibles")
+
+    with col2:
+        # Répartition par pays
+        st.markdown("#### 🏳️ Par Pays")
+        if allocation.by_country and any(v > 0 for v in allocation.by_country.values()):
+            # Graphique en barres horizontales pour les pays
+            countries = list(allocation.by_country.keys())
+            values = list(allocation.by_country.values())
+
+            # Trier par valeur décroissante
+            sorted_data = sorted(zip(countries, values), key=lambda x: x[1], reverse=True)
+            countries, values = zip(*sorted_data) if sorted_data else ([], [])
+
+            fig_country = go.Figure(go.Bar(
+                x=values,
+                y=countries,
+                orientation='h',
+                marker_color=px.colors.qualitative.Pastel,
+                text=[f"{v:.1f}%" for v in values],
+                textposition='outside'
+            ))
+            fig_country.update_layout(
+                height=max(300, len(countries) * 35),
+                margin=dict(t=20, b=20, l=100, r=40),
+                xaxis_title="Poids (%)",
+                yaxis=dict(autorange="reversed")
+            )
+            st.plotly_chart(fig_country, use_container_width=True)
+        else:
+            st.info("Données par pays non disponibles")
+
+    # Carte du monde (représentation simplifiée)
+    st.markdown("#### 📊 Diversification Géographique")
+
+    # Analyse de la diversification
+    num_regions = len([r for r, v in allocation.by_region.items() if v > 0 and r != "Non classé"])
+    num_countries = len([c for c, v in allocation.by_country.items() if v > 0 and c != "Non classé"])
+
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        st.metric("Régions couvertes", f"{num_regions}")
+    with col2:
+        st.metric("Pays couverts", f"{num_countries}")
+    with col3:
+        # Score de diversification géographique
+        if num_regions >= 3:
+            diversification = "Excellente"
+            color = "🟢"
+        elif num_regions >= 2:
+            diversification = "Bonne"
+            color = "🟡"
+        else:
+            diversification = "À améliorer"
+            color = "🔴"
+        st.metric("Diversification", f"{color} {diversification}")
+
+    # Recommandations géographiques
+    st.markdown("#### 💡 Recommandations")
+
+    recommendations = []
+    us_weight = allocation.by_country.get("United States", 0)
+    europe_weight = sum(v for k, v in allocation.by_region.items() if k == "Europe")
+
+    if us_weight > 70:
+        recommendations.append("⚠️ **Exposition US élevée** ({:.1f}%) - Considérez diversifier vers l'Europe ou l'Asie".format(us_weight))
+    if europe_weight < 10 and num_countries > 2:
+        recommendations.append("💡 **Faible exposition européenne** - Les marchés européens peuvent offrir une diversification intéressante")
+    if allocation.by_region.get("Asie-Pacifique", 0) < 5:
+        recommendations.append("🌏 **Marchés émergents** - L'Asie-Pacifique représente une opportunité de croissance")
+    if num_regions < 2:
+        recommendations.append("🔄 **Diversification limitée** - Votre portefeuille est concentré sur une seule région")
+
+    if recommendations:
+        for rec in recommendations:
+            st.markdown(rec)
+    else:
+        st.success("✅ Votre diversification géographique semble équilibrée!")
+
+
+# ==============================================================================
+# PERFORMANCE HISTORY TAB
+# ==============================================================================
+
+def render_performance_history_tab(portfolio: Portfolio):
+    """Affiche l'historique de performance du portefeuille."""
+    st.markdown("### 📈 Performance Historique")
+
+    # Informations sur la création
+    if portfolio.creation_date:
+        days_since_creation = (datetime.now() - portfolio.creation_date).days
+        st.info(f"📅 Portefeuille créé le **{portfolio.creation_date.strftime('%d/%m/%Y à %H:%M')}** (il y a {days_since_creation} jour(s))")
+
+    # Vérifier s'il y a un historique
+    if portfolio.historical_values and len(portfolio.historical_values) > 0:
+        # Créer un DataFrame à partir de l'historique
+        hist_df = pd.DataFrame(portfolio.historical_values)
+        hist_df['date'] = pd.to_datetime(hist_df['date'])
+        hist_df = hist_df.sort_values('date')
+
+        # Graphique de l'évolution de la valeur
+        st.markdown("#### 💰 Évolution de la Valeur du Portefeuille")
+
+        fig_value = go.Figure()
+
+        # Ligne de la valeur totale
+        fig_value.add_trace(go.Scatter(
+            x=hist_df['date'],
+            y=hist_df['total_value'],
+            mode='lines+markers',
+            name='Valeur totale',
+            line=dict(color='#3498db', width=2),
+            fill='tozeroy',
+            fillcolor='rgba(52, 152, 219, 0.1)'
+        ))
+
+        # Ligne du capital investi
+        fig_value.add_trace(go.Scatter(
+            x=hist_df['date'],
+            y=hist_df['total_invested'],
+            mode='lines',
+            name='Capital investi',
+            line=dict(color='#95a5a6', width=2, dash='dash')
+        ))
+
+        fig_value.update_layout(
+            height=400,
+            xaxis_title="Date",
+            yaxis_title="Valeur (€)",
+            hovermode='x unified',
+            legend=dict(orientation="h", yanchor="bottom", y=1.02)
+        )
+
+        st.plotly_chart(fig_value, use_container_width=True)
+
+        # Graphique du P/L
+        st.markdown("#### 📊 Évolution du Profit/Perte")
+
+        colors = ['#2ecc71' if v >= 0 else '#e74c3c' for v in hist_df['profit_loss']]
+
+        fig_pl = go.Figure()
+        fig_pl.add_trace(go.Bar(
+            x=hist_df['date'],
+            y=hist_df['profit_loss'],
+            marker_color=colors,
+            name='P/L (€)'
+        ))
+
+        fig_pl.add_hline(y=0, line_dash="dash", line_color="gray")
+
+        fig_pl.update_layout(
+            height=300,
+            xaxis_title="Date",
+            yaxis_title="Profit/Perte (€)"
+        )
+
+        st.plotly_chart(fig_pl, use_container_width=True)
+
+        # Statistiques
+        st.markdown("#### 📈 Statistiques de Performance")
+
+        col1, col2, col3, col4 = st.columns(4)
+
+        with col1:
+            initial_value = hist_df['total_value'].iloc[0]
+            current_value = hist_df['total_value'].iloc[-1]
+            total_return = ((current_value - initial_value) / initial_value) * 100 if initial_value > 0 else 0
+            st.metric("Rendement Total", f"{total_return:+.2f}%")
+
+        with col2:
+            max_value = hist_df['total_value'].max()
+            st.metric("Valeur Max", f"{max_value:,.2f} €")
+
+        with col3:
+            min_value = hist_df['total_value'].min()
+            st.metric("Valeur Min", f"{min_value:,.2f} €")
+
+        with col4:
+            if len(hist_df) > 1:
+                volatility = hist_df['profit_loss_percent'].std()
+                st.metric("Volatilité P/L", f"{volatility:.2f}%")
+            else:
+                st.metric("Volatilité P/L", "N/A")
+
+    else:
+        st.warning("""
+        📊 **Pas encore d'historique de performance**
+
+        L'historique sera enregistré automatiquement à chaque actualisation des cours.
+        Cliquez sur **🔄 Actualiser les cours** pour commencer à suivre la performance.
+        """)
+
+        # Afficher les données actuelles comme point de départ
+        st.markdown("#### 📍 Situation Actuelle")
+
+        col1, col2, col3 = st.columns(3)
+        with col1:
+            st.metric("Valeur Totale", f"{portfolio.total_value:,.2f} €")
+        with col2:
+            st.metric("Capital Investi", f"{portfolio.total_invested:,.2f} €")
+        with col3:
+            st.metric("P/L Actuel", f"{portfolio.total_profit_loss:+,.2f} € ({portfolio.total_profit_loss_percent:+.2f}%)")
 
 
 # ==============================================================================

@@ -64,8 +64,11 @@ class Position:
 
     # Metadata
     sector: Optional[str] = None
+    country: Optional[str] = None  # Pays de l'entreprise
+    region: Optional[str] = None   # Région géographique
     asset_type: str = "stock"  # stock, etf, crypto
     last_updated: Optional[datetime] = None
+    purchase_date: Optional[datetime] = None  # Date d'achat pour suivi performance
 
     def __post_init__(self):
         """Calculate derived values."""
@@ -105,8 +108,11 @@ class Position:
             "daily_change": round(self.daily_change, 2),
             "daily_change_percent": round(self.daily_change_percent, 2),
             "sector": self.sector,
+            "country": self.country,
+            "region": self.region,
             "asset_type": self.asset_type,
-            "last_updated": self.last_updated.isoformat() if self.last_updated else None
+            "last_updated": self.last_updated.isoformat() if self.last_updated else None,
+            "purchase_date": self.purchase_date.isoformat() if self.purchase_date else None
         }
 
 
@@ -118,6 +124,8 @@ class Portfolio:
     currency: str = "EUR"
     last_sync: Optional[datetime] = None
     source: str = "manual"  # trade_republic, csv, manual
+    creation_date: Optional[datetime] = None  # Date de création pour suivi performance
+    historical_values: List[Dict[str, Any]] = field(default_factory=list)  # Historique des valeurs
 
     @property
     def total_value(self) -> float:
@@ -178,8 +186,20 @@ class Portfolio:
             "daily_change": round(self.daily_change, 2),
             "last_sync": self.last_sync.isoformat() if self.last_sync else None,
             "source": self.source,
-            "position_count": len(self.positions)
+            "position_count": len(self.positions),
+            "creation_date": self.creation_date.isoformat() if self.creation_date else None,
+            "historical_values": self.historical_values
         }
+
+    def record_value(self):
+        """Enregistre la valeur actuelle dans l'historique."""
+        self.historical_values.append({
+            "date": datetime.now().isoformat(),
+            "total_value": round(self.total_value, 2),
+            "total_invested": round(self.total_invested, 2),
+            "profit_loss": round(self.total_profit_loss, 2),
+            "profit_loss_percent": round(self.total_profit_loss_percent, 2)
+        })
 
     def to_dataframe(self) -> pd.DataFrame:
         """Convert positions to DataFrame."""
@@ -358,6 +378,28 @@ class TradeRepublicClient:
             logger.error(f"Failed to import CSV: {e}")
             return None
 
+    def _get_region_from_country(self, country: str) -> str:
+        """Détermine la région géographique à partir du pays."""
+        region_mapping = {
+            # Amérique du Nord
+            'United States': 'Amérique du Nord', 'Canada': 'Amérique du Nord', 'Mexico': 'Amérique du Nord',
+            # Europe
+            'France': 'Europe', 'Germany': 'Europe', 'United Kingdom': 'Europe', 'Switzerland': 'Europe',
+            'Netherlands': 'Europe', 'Spain': 'Europe', 'Italy': 'Europe', 'Belgium': 'Europe',
+            'Sweden': 'Europe', 'Norway': 'Europe', 'Denmark': 'Europe', 'Finland': 'Europe',
+            'Ireland': 'Europe', 'Austria': 'Europe', 'Portugal': 'Europe', 'Luxembourg': 'Europe',
+            # Asie-Pacifique
+            'Japan': 'Asie-Pacifique', 'China': 'Asie-Pacifique', 'Hong Kong': 'Asie-Pacifique',
+            'South Korea': 'Asie-Pacifique', 'Taiwan': 'Asie-Pacifique', 'Singapore': 'Asie-Pacifique',
+            'Australia': 'Asie-Pacifique', 'India': 'Asie-Pacifique', 'New Zealand': 'Asie-Pacifique',
+            # Amérique Latine
+            'Brazil': 'Amérique Latine', 'Argentina': 'Amérique Latine', 'Chile': 'Amérique Latine',
+            # Moyen-Orient & Afrique
+            'Israel': 'Moyen-Orient', 'Saudi Arabia': 'Moyen-Orient', 'United Arab Emirates': 'Moyen-Orient',
+            'South Africa': 'Afrique',
+        }
+        return region_mapping.get(country, 'Autres')
+
     def create_manual_portfolio(
         self,
         positions_data: List[Dict[str, Any]],
@@ -391,6 +433,8 @@ class TradeRepublicClient:
                 current_price = info.get('regularMarketPrice') or info.get('currentPrice', 0)
                 name = data.get('name') or info.get('longName', symbol)
                 sector = info.get('sector')
+                country = info.get('country')
+                region = self._get_region_from_country(country) if country else None
 
                 # Determine asset type
                 quote_type = info.get('quoteType', 'EQUITY')
@@ -410,6 +454,8 @@ class TradeRepublicClient:
                 current_price = data.get('current_price', data.get('average_buy_price', 0))
                 name = data.get('name', symbol)
                 sector = None
+                country = None
+                region = None
                 asset_type = 'stock'
                 daily_change = 0
 
@@ -422,7 +468,10 @@ class TradeRepublicClient:
                 current_price=float(current_price),
                 currency=data.get('currency', 'EUR'),
                 sector=sector,
-                asset_type=asset_type
+                country=country,
+                region=region,
+                asset_type=asset_type,
+                purchase_date=datetime.now()
             )
             pos.daily_change = daily_change
             if current_price and daily_change:
@@ -435,8 +484,12 @@ class TradeRepublicClient:
             cash_balance=cash_balance,
             currency="EUR",
             last_sync=datetime.now(),
-            source="manual"
+            source="manual",
+            creation_date=datetime.now()
         )
+
+        # Enregistrer la valeur initiale
+        portfolio.record_value()
 
         self._portfolio_cache = portfolio
         self._cache_time = datetime.now()
@@ -535,7 +588,10 @@ class TradeRepublicClient:
                     current_price=pos_data.get('current_price', 0),
                     currency=pos_data.get('currency', 'EUR'),
                     sector=pos_data.get('sector'),
-                    asset_type=pos_data.get('asset_type', 'stock')
+                    country=pos_data.get('country'),
+                    region=pos_data.get('region'),
+                    asset_type=pos_data.get('asset_type', 'stock'),
+                    purchase_date=datetime.fromisoformat(pos_data['purchase_date']) if pos_data.get('purchase_date') else None
                 )
                 positions.append(pos)
 
@@ -544,7 +600,9 @@ class TradeRepublicClient:
                 cash_balance=data.get('cash_balance', 0),
                 currency=data.get('currency', 'EUR'),
                 last_sync=datetime.fromisoformat(data['last_sync']) if data.get('last_sync') else None,
-                source=data.get('source', 'loaded')
+                source=data.get('source', 'loaded'),
+                creation_date=datetime.fromisoformat(data['creation_date']) if data.get('creation_date') else None,
+                historical_values=data.get('historical_values', [])
             )
 
             self._portfolio_cache = portfolio

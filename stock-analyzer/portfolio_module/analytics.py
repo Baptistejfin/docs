@@ -92,6 +92,8 @@ class AllocationAnalysis:
     by_sector: Dict[str, float] = field(default_factory=dict)
     by_asset_type: Dict[str, float] = field(default_factory=dict)
     by_currency: Dict[str, float] = field(default_factory=dict)
+    by_country: Dict[str, float] = field(default_factory=dict)  # Répartition par pays
+    by_region: Dict[str, float] = field(default_factory=dict)   # Répartition par région
     concentration: float = 0.0  # Herfindahl index
     top_holdings: List[Dict[str, Any]] = field(default_factory=list)
 
@@ -100,6 +102,8 @@ class AllocationAnalysis:
             "by_sector": self.by_sector,
             "by_asset_type": self.by_asset_type,
             "by_currency": self.by_currency,
+            "by_country": self.by_country,
+            "by_region": self.by_region,
             "concentration_index": round(self.concentration, 4),
             "top_holdings": self.top_holdings
         }
@@ -291,6 +295,22 @@ class PortfolioAnalyzer:
         currency_values[portfolio.currency] = currency_values.get(portfolio.currency, 0) + portfolio.cash_balance
         by_currency = {k: (v / total_value * 100) for k, v in currency_values.items()}
 
+        # By country (répartition géographique par pays)
+        country_values = {}
+        for pos in portfolio.positions:
+            country = pos.country or "Non classé"
+            country_values[country] = country_values.get(country, 0) + pos.market_value
+
+        by_country = {k: (v / total_value * 100) for k, v in country_values.items()}
+
+        # By region (répartition géographique par région)
+        region_values = {}
+        for pos in portfolio.positions:
+            region = pos.region or "Non classé"
+            region_values[region] = region_values.get(region, 0) + pos.market_value
+
+        by_region = {k: (v / total_value * 100) for k, v in region_values.items()}
+
         # Concentration (Herfindahl-Hirschman Index)
         weights = [pos.market_value / total_value for pos in portfolio.positions]
         concentration = sum(w ** 2 for w in weights)
@@ -302,7 +322,9 @@ class PortfolioAnalyzer:
                 "symbol": p.symbol,
                 "name": p.name,
                 "value": p.market_value,
-                "weight": p.market_value / total_value * 100
+                "weight": p.market_value / total_value * 100,
+                "country": p.country,
+                "sector": p.sector
             }
             for p in sorted_positions[:10]
         ]
@@ -311,6 +333,8 @@ class PortfolioAnalyzer:
             by_sector=by_sector,
             by_asset_type=by_asset_type,
             by_currency=by_currency,
+            by_country=by_country,
+            by_region=by_region,
             concentration=concentration,
             top_holdings=top_holdings
         )
