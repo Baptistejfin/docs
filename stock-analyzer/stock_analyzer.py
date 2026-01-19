@@ -21,10 +21,16 @@ try:
         calculate_detailed_esg_scores,
         get_esg_comparison_benchmark,
         generate_esg_recommendations_detailed,
+        analyze_paris_alignment,
+        get_temperature_color,
+        get_alignment_color,
+        SBTI_SECTOR_TRAJECTORIES,
     )
     ESG_PRO_ENHANCED = True
+    CLIMATE_ANALYSIS_AVAILABLE = True
 except ImportError:
     ESG_PRO_ENHANCED = False
+    CLIMATE_ANALYSIS_AVAILABLE = False
     def get_simple_esg_display(ticker): return {}
     def analyze_greenwashing_pro(ticker, name, info):
         return {
@@ -37,6 +43,10 @@ except ImportError:
     def calculate_detailed_esg_scores(data): return {}
     def get_esg_comparison_benchmark(sector): return {}
     def generate_esg_recommendations_detailed(scores, threshold=50): return []
+    def analyze_paris_alignment(ticker, name, info, esg_data=None): return {}
+    def get_temperature_color(temp): return '#888'
+    def get_alignment_color(score): return '#888'
+    SBTI_SECTOR_TRAJECTORIES = {}
 
 # Gestion du module Black Swan (Cygne Noir)
 try:
@@ -3400,6 +3410,179 @@ elif analysis_mode == '🌱 Analyse ESG Pro':
 
                     *Plus le score est bas, meilleure est la note.*
                     """)
+
+                # === ANALYSE ALIGNEMENT ACCORD DE PARIS ===
+                st.markdown("---")
+                st.header("🌍 Alignement Accord de Paris")
+
+                if CLIMATE_ANALYSIS_AVAILABLE:
+                    with st.spinner("🔍 Analyse climatique en cours..."):
+                        paris_analysis = analyze_paris_alignment(ticker, full_name, info, analysis['esg_data'])
+
+                    if paris_analysis.get('data_available'):
+                        # Métriques principales
+                        col_temp, col_align, col_gap = st.columns(3)
+
+                        # Température implicite
+                        temp = paris_analysis.get('implied_temperature', 2.5)
+                        temp_color = get_temperature_color(temp)
+
+                        with col_temp:
+                            st.markdown(f"""
+                            <div style="text-align: center; padding: 20px; background: {temp_color}22;
+                                        border: 3px solid {temp_color}; border-radius: 20px;">
+                                <p style="margin: 0; font-size: 0.9em; opacity: 0.8;">🌡️ Température Implicite</p>
+                                <h1 style="margin: 5px 0; font-size: 3em; color: {temp_color};">{temp}°C</h1>
+                                <p style="margin: 0; font-size: 0.85em;">
+                                    {'✅ Aligné Paris' if temp <= 2.0 else '⚠️ Non aligné' if temp <= 3.0 else '🔴 Critique'}
+                                </p>
+                            </div>
+                            """, unsafe_allow_html=True)
+
+                        # Score d'alignement
+                        align_score = paris_analysis.get('alignment_score', 50)
+                        align_color = get_alignment_color(align_score)
+                        paris_status = paris_analysis.get('paris_status', 'Inconnu')
+
+                        with col_align:
+                            st.markdown(f"""
+                            <div style="text-align: center; padding: 20px; background: {align_color}22;
+                                        border: 3px solid {align_color}; border-radius: 20px;">
+                                <p style="margin: 0; font-size: 0.9em; opacity: 0.8;">📊 Score d'Alignement</p>
+                                <h1 style="margin: 5px 0; font-size: 3em; color: {align_color};">{align_score}</h1>
+                                <p style="margin: 0; font-size: 0.85em;">{paris_status}</p>
+                            </div>
+                            """, unsafe_allow_html=True)
+
+                        # Gap de crédibilité
+                        gap = paris_analysis.get('credibility_gap', 0)
+                        gap_level = paris_analysis.get('credibility_level', 'unknown')
+                        gap_colors = {'LOW': '#27ae60', 'MEDIUM': '#f1c40f', 'HIGH': '#e74c3c', 'unknown': '#888'}
+                        gap_color = gap_colors.get(gap_level, '#888')
+
+                        with col_gap:
+                            st.markdown(f"""
+                            <div style="text-align: center; padding: 20px; background: {gap_color}22;
+                                        border: 3px solid {gap_color}; border-radius: 20px;">
+                                <p style="margin: 0; font-size: 0.9em; opacity: 0.8;">📉 Gap de Crédibilité</p>
+                                <h1 style="margin: 5px 0; font-size: 3em; color: {gap_color};">{gap}%</h1>
+                                <p style="margin: 0; font-size: 0.85em;">
+                                    {'✅ Crédible' if gap <= 15 else '⚠️ À surveiller' if gap <= 30 else '🔴 Greenwashing'}
+                                </p>
+                            </div>
+                            """, unsafe_allow_html=True)
+
+                        # Émissions estimées
+                        st.markdown("---")
+                        st.markdown("#### 💨 Émissions Carbone Estimées")
+
+                        emissions = paris_analysis.get('emissions', {})
+                        if emissions.get('available'):
+                            em_cols = st.columns(4)
+
+                            with em_cols[0]:
+                                st.metric("Scope 1 (Direct)", f"{emissions.get('scope1', 0):,.0f} tCO2e",
+                                         help="Émissions directes de l'entreprise")
+                            with em_cols[1]:
+                                st.metric("Scope 2 (Énergie)", f"{emissions.get('scope2', 0):,.0f} tCO2e",
+                                         help="Émissions de l'énergie achetée")
+                            with em_cols[2]:
+                                st.metric("Scope 3 (Chaîne)", f"{emissions.get('scope3', 0):,.0f} tCO2e",
+                                         help="Émissions de la chaîne de valeur")
+                            with em_cols[3]:
+                                st.metric("Total", f"{emissions.get('total_emissions', 0):,.0f} tCO2e",
+                                         delta=f"{emissions.get('carbon_intensity', 0)} tCO2e/M€")
+
+                            if emissions.get('estimated'):
+                                st.caption("⚠️ Émissions estimées par proxy sectoriel - données réelles non publiées")
+
+                        # Trajectoire SBTi requise
+                        trajectory = paris_analysis.get('trajectory', {})
+                        if trajectory:
+                            st.markdown("#### 📈 Trajectoire SBTi Requise")
+                            traj_cols = st.columns(4)
+                            with traj_cols[0]:
+                                st.metric("Réduction annuelle", f"-{trajectory.get('required_annual_reduction', 0)}%/an")
+                            with traj_cols[1]:
+                                st.metric("Objectif 2030", f"-{trajectory.get('target_2030', 0)}%")
+                            with traj_cols[2]:
+                                st.metric("Objectif 2050", f"-{trajectory.get('target_2050', 0)}%")
+                            with traj_cols[3]:
+                                fossil_exit = "Oui" if trajectory.get('fossil_exit_required') else "Non"
+                                st.metric("Sortie fossiles", fossil_exit)
+
+                        # Alertes Greenwashing
+                        greenwashing_alerts = paris_analysis.get('greenwashing_alerts', [])
+                        if greenwashing_alerts:
+                            st.markdown("---")
+                            st.markdown("#### 🚨 Alertes Greenwashing Climatique")
+
+                            for alert in greenwashing_alerts:
+                                sev = alert.get('severity', 'LOW')
+                                sev_colors = {'HIGH': '#e74c3c', 'MEDIUM': '#f39c12', 'LOW': '#3498db'}
+                                sev_icons = {'HIGH': '🔴', 'MEDIUM': '🟠', 'LOW': '🟡'}
+
+                                st.markdown(f"""
+                                <div style="padding: 12px; margin: 8px 0; background: {sev_colors.get(sev, '#888')}15;
+                                            border-left: 4px solid {sev_colors.get(sev, '#888')}; border-radius: 8px;">
+                                    {sev_icons.get(sev, '⚪')} <b>{alert.get('title', '')}</b>
+                                    <p style="margin: 5px 0 0 20px; opacity: 0.9;">{alert.get('description', '')}</p>
+                                </div>
+                                """, unsafe_allow_html=True)
+
+                        # Recommandations climatiques
+                        climate_recs = paris_analysis.get('recommendations', [])
+                        if climate_recs:
+                            st.markdown("---")
+                            st.markdown("#### 🎯 Recommandations Climatiques")
+
+                            for rec in climate_recs:
+                                priority = rec.get('priority', 'MEDIUM')
+                                pri_colors = {'CRITICAL': '#c0392b', 'HIGH': '#e74c3c', 'MEDIUM': '#f39c12', 'LOW': '#3498db'}
+                                pri_labels = {'CRITICAL': 'Critique', 'HIGH': 'Haute', 'MEDIUM': 'Moyenne', 'LOW': 'Basse'}
+
+                                st.markdown(f"""
+                                <div style="padding: 12px; margin: 8px 0; background: {pri_colors.get(priority, '#888')}15;
+                                            border-left: 4px solid {pri_colors.get(priority, '#888')}; border-radius: 8px;">
+                                    <span style="background: {pri_colors.get(priority, '#888')}; color: white;
+                                                padding: 2px 8px; border-radius: 4px; font-size: 0.75em;">
+                                        {pri_labels.get(priority, 'Info')}
+                                    </span>
+                                    <span style="margin-left: 10px; font-weight: bold;">{rec.get('category', '')}</span>
+                                    <p style="margin: 8px 0 0 0;">→ {rec.get('action', '')}</p>
+                                    <p style="margin: 4px 0 0 0; font-size: 0.85em; opacity: 0.8;">
+                                        💡 Impact: {rec.get('impact', '')}
+                                    </p>
+                                </div>
+                                """, unsafe_allow_html=True)
+
+                        # Notes méthodologiques
+                        notes = paris_analysis.get('methodology_notes', [])
+                        if notes:
+                            with st.expander("📋 Notes Méthodologiques"):
+                                for note in notes:
+                                    st.markdown(f"- {note}")
+
+                                st.markdown("""
+                                ---
+                                **Sources de référence:**
+                                - Science Based Targets initiative (SBTi)
+                                - Accord de Paris (COP21) - Objectif 1.5°C
+                                - IPCC AR6 - Trajectoires de décarbonation
+
+                                **Interprétation de la température implicite:**
+                                - ≤ 1.5°C : Aligné avec l'objectif de Paris
+                                - ≤ 2.0°C : Aligné avec le seuil minimal
+                                - 2.0-3.0°C : Non aligné - efforts insuffisants
+                                - > 3.0°C : Critique - aucun effort de transition
+                                """)
+                    else:
+                        st.warning("⚠️ Données insuffisantes pour l'analyse climatique complète")
+                        if paris_analysis.get('error'):
+                            st.caption(paris_analysis['error'])
+                else:
+                    st.info("Module d'analyse climatique non disponible")
+
         else:
             st.error(f"❌ Entreprise non trouvée")
 

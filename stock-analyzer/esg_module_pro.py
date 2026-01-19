@@ -1560,6 +1560,602 @@ def get_simple_esg_display(ticker: str) -> Dict[str, Any]:
     }
 
 
+# ============ ANALYSE ALIGNEMENT ACCORD DE PARIS ============
+
+# Trajectoires SBTi par secteur (% réduction annuelle requise pour 1.5°C)
+SBTI_SECTOR_TRAJECTORIES = {
+    'Energy': {'annual_reduction': 4.2, 'target_2030': 45, 'target_2050': 90, 'fossil_exit': True},
+    'Utilities': {'annual_reduction': 4.0, 'target_2030': 40, 'target_2050': 95, 'fossil_exit': True},
+    'Materials': {'annual_reduction': 3.0, 'target_2030': 30, 'target_2050': 85, 'fossil_exit': False},
+    'Industrials': {'annual_reduction': 3.0, 'target_2030': 30, 'target_2050': 85, 'fossil_exit': False},
+    'Consumer Discretionary': {'annual_reduction': 2.5, 'target_2030': 25, 'target_2050': 80, 'fossil_exit': False},
+    'Consumer Staples': {'annual_reduction': 2.5, 'target_2030': 25, 'target_2050': 80, 'fossil_exit': False},
+    'Health Care': {'annual_reduction': 2.0, 'target_2030': 20, 'target_2050': 75, 'fossil_exit': False},
+    'Financials': {'annual_reduction': 4.0, 'target_2030': 40, 'target_2050': 100, 'fossil_exit': True},  # Alignement portefeuille
+    'Information Technology': {'annual_reduction': 2.5, 'target_2030': 25, 'target_2050': 80, 'fossil_exit': False},
+    'Communication Services': {'annual_reduction': 2.5, 'target_2030': 25, 'target_2050': 80, 'fossil_exit': False},
+    'Real Estate': {'annual_reduction': 3.5, 'target_2030': 35, 'target_2050': 90, 'fossil_exit': False},
+    'default': {'annual_reduction': 3.0, 'target_2030': 30, 'target_2050': 85, 'fossil_exit': False},
+}
+
+# Poids du Scope 3 par secteur (% des émissions totales typiques)
+SCOPE3_WEIGHT_BY_SECTOR = {
+    'Energy': 85,
+    'Financials': 95,
+    'Consumer Discretionary': 90,
+    'Consumer Staples': 85,
+    'Information Technology': 80,
+    'Industrials': 75,
+    'Materials': 70,
+    'Health Care': 75,
+    'Communication Services': 80,
+    'Utilities': 40,
+    'Real Estate': 60,
+    'default': 75,
+}
+
+
+def get_carbon_data_from_info(info: dict) -> Dict[str, Any]:
+    """
+    Extrait les données carbone disponibles depuis les infos Yahoo Finance.
+
+    Note: Yahoo Finance ne fournit pas toujours les données carbone détaillées.
+    Cette fonction tente d'extraire ce qui est disponible.
+    """
+    carbon_data = {
+        'available': False,
+        'scope1': None,
+        'scope2': None,
+        'scope3': None,
+        'total_emissions': None,
+        'carbon_intensity': None,
+        'year': None,
+        'source': 'estimated',
+    }
+
+    if not info:
+        return carbon_data
+
+    # Tentative d'extraction des données carbone si disponibles
+    # Yahoo Finance peut avoir des données ESG dans certains cas
+
+    return carbon_data
+
+
+@cached(ttl=3600)
+def estimate_carbon_footprint(ticker: str, info: dict, sector: str) -> Dict[str, Any]:
+    """
+    Estime l'empreinte carbone basée sur les données financières et le secteur.
+
+    Méthodologie :
+    - Utilise l'intensité carbone moyenne du secteur
+    - Ajuste selon la taille (revenus) de l'entreprise
+    - Applique les ratios Scope 1/2/3 sectoriels
+    """
+    result = {
+        'available': True,
+        'estimated': True,
+        'methodology': 'Estimation par proxy sectoriel',
+        'confidence': 'LOW',
+        'scope1': None,
+        'scope2': None,
+        'scope3': None,
+        'total_emissions': None,
+        'carbon_intensity': None,  # tCO2e / M€ revenue
+        'unit': 'tCO2e',
+        'currency': 'EUR',
+        'year': datetime.now().year - 1,
+    }
+
+    if not info:
+        result['available'] = False
+        return result
+
+    # Obtenir les revenus
+    revenue = info.get('totalRevenue') or info.get('revenue') or 0
+    if revenue == 0:
+        result['available'] = False
+        result['error'] = 'Revenus non disponibles'
+        return result
+
+    # Convertir en millions EUR (approximation)
+    revenue_meur = revenue / 1_000_000
+
+    # Intensité carbone moyenne par secteur (tCO2e / M€)
+    sector_intensity = {
+        'Energy': 850,
+        'Utilities': 700,
+        'Materials': 450,
+        'Industrials': 150,
+        'Consumer Discretionary': 80,
+        'Consumer Staples': 120,
+        'Health Care': 40,
+        'Financials': 15,
+        'Information Technology': 25,
+        'Communication Services': 30,
+        'Real Estate': 100,
+        'default': 100,
+    }
+
+    intensity = sector_intensity.get(sector, sector_intensity['default'])
+
+    # Calculer les émissions estimées
+    total_emissions = revenue_meur * intensity
+
+    # Répartition Scope 1/2/3 par secteur
+    scope3_percent = SCOPE3_WEIGHT_BY_SECTOR.get(sector, 75) / 100
+    scope1_percent = (1 - scope3_percent) * 0.6  # 60% du non-Scope3
+    scope2_percent = (1 - scope3_percent) * 0.4  # 40% du non-Scope3
+
+    result['scope1'] = round(total_emissions * scope1_percent)
+    result['scope2'] = round(total_emissions * scope2_percent)
+    result['scope3'] = round(total_emissions * scope3_percent)
+    result['total_emissions'] = round(total_emissions)
+    result['carbon_intensity'] = round(intensity, 1)
+    result['revenue_meur'] = round(revenue_meur, 1)
+
+    return result
+
+
+def analyze_paris_alignment(ticker: str, company_name: str, info: dict, esg_data: dict = None) -> Dict[str, Any]:
+    """
+    Analyse l'alignement de l'entreprise avec l'Accord de Paris.
+
+    Retourne :
+    - Score d'alignement (0-100)
+    - Gap de crédibilité climatique (%)
+    - Température implicite (°C)
+    - Détails par Scope
+    - Recommandations
+    """
+    result = {
+        'ticker': ticker,
+        'company_name': company_name,
+        'timestamp': datetime.now().isoformat(),
+        'data_available': False,
+        'alignment_score': None,
+        'credibility_gap': None,
+        'implied_temperature': None,
+        'paris_status': None,
+        'sector': None,
+        'trajectory': {},
+        'emissions': {},
+        'commitments': {},
+        'greenwashing_alerts': [],
+        'recommendations': [],
+        'methodology_notes': [],
+    }
+
+    if not info:
+        result['error'] = 'Données entreprise non disponibles'
+        return result
+
+    # Identifier le secteur
+    sector = info.get('sector', 'default')
+    result['sector'] = sector
+
+    # Obtenir la trajectoire SBTi requise
+    trajectory = SBTI_SECTOR_TRAJECTORIES.get(sector, SBTI_SECTOR_TRAJECTORIES['default'])
+    result['trajectory'] = {
+        'required_annual_reduction': trajectory['annual_reduction'],
+        'target_2030': trajectory['target_2030'],
+        'target_2050': trajectory['target_2050'],
+        'fossil_exit_required': trajectory['fossil_exit'],
+        'scope3_weight_typical': SCOPE3_WEIGHT_BY_SECTOR.get(sector, 75),
+    }
+
+    # Estimer les émissions
+    emissions = estimate_carbon_footprint(ticker, info, sector)
+    result['emissions'] = emissions
+
+    if emissions.get('available'):
+        result['data_available'] = True
+
+    # Analyser les engagements (basé sur les données ESG si disponibles)
+    commitments = analyze_climate_commitments(info, esg_data)
+    result['commitments'] = commitments
+
+    # Calculer le score d'alignement
+    alignment = calculate_alignment_score(emissions, commitments, trajectory, sector)
+    result['alignment_score'] = alignment['score']
+    result['paris_status'] = alignment['status']
+    result['implied_temperature'] = alignment['temperature']
+
+    # Calculer le gap de crédibilité
+    credibility = calculate_credibility_gap(emissions, commitments, trajectory)
+    result['credibility_gap'] = credibility['gap']
+    result['credibility_level'] = credibility['level']
+
+    # Détecter le greenwashing
+    greenwashing = detect_climate_greenwashing(emissions, commitments, credibility, info)
+    result['greenwashing_alerts'] = greenwashing['alerts']
+    result['greenwashing_score'] = greenwashing['score']
+
+    # Générer les recommandations
+    result['recommendations'] = generate_climate_recommendations(
+        alignment, credibility, greenwashing, sector, trajectory
+    )
+
+    # Notes méthodologiques
+    if emissions.get('estimated'):
+        result['methodology_notes'].append(
+            "⚠️ Émissions estimées par proxy sectoriel - données réelles non disponibles"
+        )
+
+    result['methodology_notes'].append(
+        f"Trajectoire SBTi {sector}: -{trajectory['annual_reduction']}%/an pour alignement 1.5°C"
+    )
+
+    return result
+
+
+def analyze_climate_commitments(info: dict, esg_data: dict = None) -> Dict[str, Any]:
+    """
+    Analyse les engagements climatiques déclarés par l'entreprise.
+    """
+    commitments = {
+        'net_zero_target': None,
+        'net_zero_year': None,
+        'sbti_status': 'unknown',  # validated, committed, none
+        'scope_coverage': [],
+        'interim_targets': [],
+        'compensation_reliance': 'unknown',
+        'transition_plan': False,
+        'capex_green_ratio': None,
+    }
+
+    # Si on a des données ESG détaillées
+    if esg_data:
+        sources = esg_data.get('sources', {})
+        yf_esg = sources.get('yfinance', {})
+
+        # Vérifier le score environnement
+        env_score = yf_esg.get('environment_score')
+        if env_score:
+            # Score bas = bon (Sustainalytics)
+            if env_score < 20:
+                commitments['sbti_status'] = 'likely_committed'
+            elif env_score > 40:
+                commitments['sbti_status'] = 'likely_none'
+
+    # Vérifier la présence de mentions dans les données
+    company_name = info.get('longName', '').lower() if info else ''
+
+    # Estimation basée sur le secteur et la taille
+    market_cap = info.get('marketCap', 0) if info else 0
+
+    # Les grandes entreprises sont plus susceptibles d'avoir des engagements
+    if market_cap > 50_000_000_000:  # > 50B
+        commitments['net_zero_year'] = 2050  # Estimation conservatrice
+        commitments['scope_coverage'] = ['Scope 1', 'Scope 2']
+        commitments['transition_plan'] = True
+    elif market_cap > 10_000_000_000:  # > 10B
+        commitments['net_zero_year'] = 2050
+        commitments['scope_coverage'] = ['Scope 1', 'Scope 2']
+
+    return commitments
+
+
+def calculate_alignment_score(emissions: dict, commitments: dict, trajectory: dict, sector: str) -> Dict[str, Any]:
+    """
+    Calcule le score d'alignement avec l'Accord de Paris.
+
+    Score 80-100 : Aligné 1.5°C
+    Score 60-79 : Aligné 2°C
+    Score 40-59 : Non aligné
+    Score 0-39 : Critique
+    """
+    result = {
+        'score': 50,  # Score par défaut (incertain)
+        'status': 'Données insuffisantes',
+        'temperature': 2.5,  # Température implicite par défaut
+        'details': {},
+    }
+
+    base_score = 50
+
+    # Ajustements basés sur les engagements
+    if commitments.get('sbti_status') == 'likely_committed':
+        base_score += 15
+    elif commitments.get('sbti_status') == 'likely_none':
+        base_score -= 10
+
+    if commitments.get('net_zero_year'):
+        year = commitments['net_zero_year']
+        if year <= 2040:
+            base_score += 20
+        elif year <= 2050:
+            base_score += 10
+        else:
+            base_score -= 5
+
+    # Couverture des Scopes
+    scopes = commitments.get('scope_coverage', [])
+    if 'Scope 3' in scopes:
+        base_score += 15
+    elif len(scopes) >= 2:
+        base_score += 5
+
+    # Plan de transition
+    if commitments.get('transition_plan'):
+        base_score += 10
+
+    # Ajustement sectoriel (secteurs difficiles à décarboner)
+    difficult_sectors = ['Energy', 'Utilities', 'Materials', 'Industrials']
+    if sector in difficult_sectors:
+        # Bonus si score correct dans secteur difficile
+        if base_score > 50:
+            base_score += 5
+
+    # Plafonner le score
+    score = max(0, min(100, base_score))
+
+    # Déterminer le statut
+    if score >= 80:
+        result['status'] = 'Aligné 1.5°C'
+        result['temperature'] = 1.5
+    elif score >= 60:
+        result['status'] = 'Aligné 2°C'
+        result['temperature'] = 2.0
+    elif score >= 40:
+        result['status'] = 'Non aligné'
+        result['temperature'] = 2.7
+    else:
+        result['status'] = 'Critique'
+        result['temperature'] = 3.5
+
+    result['score'] = score
+
+    return result
+
+
+def calculate_credibility_gap(emissions: dict, commitments: dict, trajectory: dict) -> Dict[str, Any]:
+    """
+    Calcule le gap de crédibilité entre engagements et trajectoire réelle.
+
+    Gap > 15% : Alerte greenwashing
+    Gap > 30% : Greenwashing avéré
+    """
+    result = {
+        'gap': None,
+        'level': 'unknown',
+        'details': {},
+    }
+
+    # Sans données d'émissions historiques, on ne peut pas calculer la trajectoire réelle
+    # On utilise donc une estimation basée sur les engagements
+
+    if not commitments.get('net_zero_year'):
+        result['gap'] = 40  # Pas d'engagement = gap élevé
+        result['level'] = 'HIGH'
+        result['details']['reason'] = 'Absence d\'objectif Net Zero déclaré'
+        return result
+
+    # Estimation du gap basée sur la couverture des Scopes
+    scopes = commitments.get('scope_coverage', [])
+
+    if 'Scope 3' in scopes:
+        gap = 10  # Faible gap si Scope 3 inclus
+    elif 'Scope 1' in scopes and 'Scope 2' in scopes:
+        gap = 25  # Gap modéré si Scope 1+2 seulement
+    else:
+        gap = 50  # Gap élevé si couverture limitée
+
+    # Ajustement si pas de plan de transition
+    if not commitments.get('transition_plan'):
+        gap += 15
+
+    result['gap'] = min(100, gap)
+
+    if gap <= 15:
+        result['level'] = 'LOW'
+    elif gap <= 30:
+        result['level'] = 'MEDIUM'
+    else:
+        result['level'] = 'HIGH'
+
+    return result
+
+
+def detect_climate_greenwashing(emissions: dict, commitments: dict, credibility: dict, info: dict) -> Dict[str, Any]:
+    """
+    Détecte les signes de greenwashing climatique.
+    """
+    alerts = []
+    score = 0  # 0 = pas de greenwashing, 100 = greenwashing avéré
+
+    # 1. Gap de crédibilité élevé
+    gap = credibility.get('gap', 0)
+    if gap > 30:
+        alerts.append({
+            'type': 'CREDIBILITY_GAP',
+            'severity': 'HIGH',
+            'title': f'Gap de crédibilité de {gap}%',
+            'description': 'Écart significatif entre les engagements déclarés et la trajectoire probable'
+        })
+        score += 30
+    elif gap > 15:
+        alerts.append({
+            'type': 'CREDIBILITY_GAP',
+            'severity': 'MEDIUM',
+            'title': f'Gap de crédibilité modéré ({gap}%)',
+            'description': 'Les engagements semblent optimistes par rapport aux actions'
+        })
+        score += 15
+
+    # 2. Scope 3 ignoré
+    scopes = commitments.get('scope_coverage', [])
+    if 'Scope 3' not in scopes:
+        sector = info.get('sector', 'default') if info else 'default'
+        scope3_weight = SCOPE3_WEIGHT_BY_SECTOR.get(sector, 75)
+
+        if scope3_weight >= 80:
+            alerts.append({
+                'type': 'SCOPE3_IGNORED',
+                'severity': 'HIGH',
+                'title': f'Scope 3 non couvert ({scope3_weight}% des émissions typiques)',
+                'description': 'Les émissions de la chaîne de valeur sont ignorées dans les engagements'
+            })
+            score += 25
+        elif scope3_weight >= 60:
+            alerts.append({
+                'type': 'SCOPE3_IGNORED',
+                'severity': 'MEDIUM',
+                'title': f'Scope 3 non couvert ({scope3_weight}% des émissions typiques)',
+                'description': 'Une part significative des émissions n\'est pas adressée'
+            })
+            score += 15
+
+    # 3. Objectif Net Zero lointain sans jalons intermédiaires
+    net_zero_year = commitments.get('net_zero_year')
+    interim_targets = commitments.get('interim_targets', [])
+
+    if net_zero_year and net_zero_year > 2045 and not interim_targets:
+        alerts.append({
+            'type': 'DISTANT_TARGET',
+            'severity': 'MEDIUM',
+            'title': f'Objectif Net Zero en {net_zero_year} sans jalons',
+            'description': 'Objectif lointain sans engagements intermédiaires vérifiables'
+        })
+        score += 15
+
+    # 4. Pas d'engagement SBTi pour les grandes entreprises
+    market_cap = info.get('marketCap', 0) if info else 0
+    sbti_status = commitments.get('sbti_status', 'unknown')
+
+    if market_cap > 10_000_000_000 and sbti_status in ['unknown', 'likely_none']:
+        alerts.append({
+            'type': 'NO_SBTI',
+            'severity': 'MEDIUM',
+            'title': 'Absence d\'engagement SBTi',
+            'description': 'Grande entreprise sans validation Science Based Targets'
+        })
+        score += 10
+
+    # 5. Secteur à risque sans plan de sortie fossile
+    sector = info.get('sector', '') if info else ''
+    trajectory = SBTI_SECTOR_TRAJECTORIES.get(sector, {})
+
+    if trajectory.get('fossil_exit') and sector in ['Energy', 'Utilities']:
+        alerts.append({
+            'type': 'FOSSIL_EXPOSURE',
+            'severity': 'HIGH',
+            'title': 'Secteur nécessitant sortie des fossiles',
+            'description': 'L\'alignement 1.5°C requiert un plan de sortie des énergies fossiles'
+        })
+        score += 20
+
+    result = {
+        'alerts': alerts,
+        'score': min(100, score),
+        'level': 'NONE' if score < 20 else ('LOW' if score < 40 else ('MEDIUM' if score < 60 else 'HIGH')),
+    }
+
+    return result
+
+
+def generate_climate_recommendations(alignment: dict, credibility: dict, greenwashing: dict,
+                                     sector: str, trajectory: dict) -> List[Dict[str, Any]]:
+    """
+    Génère des recommandations pour améliorer l'alignement climatique.
+    """
+    recommendations = []
+
+    # Basé sur le score d'alignement
+    score = alignment.get('score', 50)
+
+    if score < 40:
+        recommendations.append({
+            'priority': 'CRITICAL',
+            'category': 'Stratégie',
+            'action': 'Définir une stratégie climat avec objectifs Science Based Targets',
+            'impact': 'Fondamental pour la crédibilité et l\'accès aux capitaux verts'
+        })
+
+    if score < 60:
+        recommendations.append({
+            'priority': 'HIGH',
+            'category': 'Objectifs',
+            'action': f'S\'engager sur une réduction de {trajectory.get("annual_reduction", 3)}%/an minimum',
+            'impact': 'Nécessaire pour l\'alignement 2°C'
+        })
+
+    # Basé sur le gap de crédibilité
+    gap = credibility.get('gap', 0)
+
+    if gap > 20:
+        recommendations.append({
+            'priority': 'HIGH',
+            'category': 'Transparence',
+            'action': 'Publier un plan de transition détaillé avec jalons intermédiaires',
+            'impact': 'Réduire le gap de crédibilité et renforcer la confiance'
+        })
+
+    # Basé sur les alertes greenwashing
+    for alert in greenwashing.get('alerts', []):
+        if alert['type'] == 'SCOPE3_IGNORED':
+            recommendations.append({
+                'priority': 'HIGH',
+                'category': 'Scope 3',
+                'action': 'Intégrer le Scope 3 dans les objectifs de réduction',
+                'impact': 'Couvrir l\'essentiel des émissions réelles'
+            })
+            break
+
+    # Recommandations sectorielles
+    if sector == 'Financials':
+        recommendations.append({
+            'priority': 'MEDIUM',
+            'category': 'Finance verte',
+            'action': 'Aligner le portefeuille d\'investissements (méthodologie PCAF)',
+            'impact': 'Réduire les émissions financées'
+        })
+    elif sector == 'Energy':
+        recommendations.append({
+            'priority': 'CRITICAL',
+            'category': 'Transition énergétique',
+            'action': 'Planifier la sortie des énergies fossiles d\'ici 2040',
+            'impact': 'Condition sine qua non pour l\'alignement 1.5°C'
+        })
+
+    # Recommandation générale si peu d'alertes
+    if len(recommendations) < 2:
+        recommendations.append({
+            'priority': 'MEDIUM',
+            'category': 'Communication',
+            'action': 'Renforcer la transparence des données carbone (CDP, GRI)',
+            'impact': 'Améliorer la notation ESG et l\'attractivité pour les investisseurs'
+        })
+
+    return recommendations
+
+
+def get_temperature_color(temp: float) -> str:
+    """Retourne une couleur selon la température implicite."""
+    if temp <= 1.5:
+        return '#27ae60'  # Vert
+    elif temp <= 2.0:
+        return '#82e0aa'  # Vert clair
+    elif temp <= 2.5:
+        return '#f1c40f'  # Jaune
+    elif temp <= 3.0:
+        return '#e67e22'  # Orange
+    else:
+        return '#e74c3c'  # Rouge
+
+
+def get_alignment_color(score: int) -> str:
+    """Retourne une couleur selon le score d'alignement."""
+    if score >= 80:
+        return '#27ae60'
+    elif score >= 60:
+        return '#82e0aa'
+    elif score >= 40:
+        return '#f1c40f'
+    else:
+        return '#e74c3c'
+
+
 # ============ TEST ============
 
 if __name__ == "__main__":
