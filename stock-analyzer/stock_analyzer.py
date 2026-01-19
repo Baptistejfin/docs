@@ -4,6 +4,7 @@ Analyse ESG + Fondamentale Avancée + Historique 10 ans + DCF + Indicateurs Tech
 """
 
 import streamlit as st
+import streamlit.components.v1 as components
 import pandas as pd
 import numpy as np
 import plotly.graph_objects as go
@@ -394,6 +395,94 @@ def calculate_stochastic(high, low, close, k_period=14, d_period=3):
     return k, d
 
 
+def get_tradingview_symbol(ticker: str, info: dict) -> str:
+    """Convertit le ticker en symbole TradingView avec le bon exchange."""
+    exchange = info.get('exchange', '')
+
+    # Mapping des exchanges Yahoo vers TradingView
+    exchange_mapping = {
+        'NMS': 'NASDAQ',
+        'NGM': 'NASDAQ',
+        'NYQ': 'NYSE',
+        'PCX': 'NYSE',
+        'ASE': 'NYSE',
+        'BTS': 'NYSE',
+        'PAR': 'EURONEXT',
+        'EPA': 'EURONEXT',
+        'FRA': 'XETR',
+        'ETR': 'XETR',
+        'GER': 'XETR',
+        'LSE': 'LSE',
+        'LON': 'LSE',
+        'TYO': 'TSE',
+        'HKG': 'HKEX',
+        'TSE': 'TSX',
+        'TOR': 'TSX',
+        'SHH': 'SSE',
+        'SHZ': 'SZSE',
+    }
+
+    tv_exchange = exchange_mapping.get(exchange, '')
+
+    # Nettoyage du ticker
+    clean_ticker = ticker.replace('.PA', '').replace('.DE', '').replace('.L', '').replace('.TO', '')
+
+    if tv_exchange:
+        return f"{tv_exchange}:{clean_ticker}"
+    return ticker
+
+
+def display_tradingview_chart(ticker: str, info: dict, height: int = 600):
+    """Affiche le widget TradingView Advanced Chart."""
+
+    tv_symbol = get_tradingview_symbol(ticker, info)
+
+    tradingview_html = f"""
+    <!-- TradingView Widget BEGIN -->
+    <div class="tradingview-widget-container" style="height:{height}px;width:100%">
+      <div id="tradingview_chart" style="height:calc(100% - 32px);width:100%"></div>
+      <div class="tradingview-widget-copyright">
+        <a href="https://fr.tradingview.com/" rel="noopener nofollow" target="_blank">
+          <span class="blue-text">Suivre tous les marchés sur TradingView</span>
+        </a>
+      </div>
+      <script type="text/javascript" src="https://s3.tradingview.com/tv.js"></script>
+      <script type="text/javascript">
+      new TradingView.widget(
+      {{
+        "autosize": true,
+        "symbol": "{tv_symbol}",
+        "interval": "D",
+        "timezone": "Europe/Paris",
+        "theme": "dark",
+        "style": "1",
+        "locale": "fr",
+        "enable_publishing": false,
+        "withdateranges": true,
+        "hide_side_toolbar": false,
+        "allow_symbol_change": true,
+        "details": true,
+        "hotlist": false,
+        "calendar": false,
+        "studies": [
+          "STD;Bollinger_Bands",
+          "STD;MACD",
+          "STD;RSI"
+        ],
+        "container_id": "tradingview_chart",
+        "show_popup_button": true,
+        "popup_width": "1000",
+        "popup_height": "650"
+      }}
+      );
+      </script>
+    </div>
+    <!-- TradingView Widget END -->
+    """
+
+    components.html(tradingview_html, height=height)
+
+
 # ============ GRAPHIQUE AVEC INDICATEURS TECHNIQUES ============
 
 def display_price_chart_with_indicators(ticker, info, hist_full):
@@ -460,12 +549,40 @@ def display_price_chart_with_indicators(ticker, info, hist_full):
     with col_chart_type:
         chart_type = st.selectbox(
             "Type de graphique",
-            options=["Chandelier", "Ligne", "Barres OHLC"],
+            options=["TradingView", "Chandelier", "Ligne", "Barres OHLC"],
             index=0,
-            help="Chandelier japonais, ligne ou barres OHLC"
+            help="TradingView (interactif), Chandelier japonais, ligne ou barres OHLC"
         )
 
-    # === RÉCUPÉRATION DES DONNÉES ===
+    # === AFFICHAGE TRADINGVIEW ===
+    if chart_type == "TradingView":
+        chart_height = 700 if fullscreen else 550
+        display_tradingview_chart(ticker, info, height=chart_height)
+
+        # Afficher les métriques de base même avec TradingView
+        hist = get_stock_history(ticker, period, interval)
+        if hist is not None and not hist.empty and len(hist) > 1:
+            start_price = hist['Close'].iloc[0]
+            end_price = hist['Close'].iloc[-1]
+            perf_percent = ((end_price - start_price) / start_price) * 100
+
+            col1, col2, col3, col4 = st.columns(4)
+            with col1:
+                st.metric(
+                    f"Performance {selected_period}",
+                    f"{perf_percent:+.2f}%",
+                    delta=f"${end_price - start_price:+.2f}",
+                    delta_color="normal" if perf_percent >= 0 else "inverse"
+                )
+            with col2:
+                st.metric("Prix actuel", f"${end_price:.2f}")
+            with col3:
+                st.metric(f"Plus haut {selected_period}", f"${hist['High'].max():.2f}")
+            with col4:
+                st.metric(f"Plus bas {selected_period}", f"${hist['Low'].min():.2f}")
+        return
+
+    # === RÉCUPÉRATION DES DONNÉES (pour graphiques Plotly) ===
     hist = get_stock_history(ticker, period, interval)
 
     if hist is None or hist.empty:
