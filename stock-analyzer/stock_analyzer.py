@@ -17,8 +17,14 @@ try:
     from esg_module_pro import (
         get_simple_esg_display,
         analyze_greenwashing_pro,
+        score_to_grade,
+        calculate_detailed_esg_scores,
+        get_esg_comparison_benchmark,
+        generate_esg_recommendations_detailed,
     )
+    ESG_PRO_ENHANCED = True
 except ImportError:
+    ESG_PRO_ENHANCED = False
     def get_simple_esg_display(ticker): return {}
     def analyze_greenwashing_pro(ticker, name, info):
         return {
@@ -27,6 +33,10 @@ except ImportError:
             'esg_data': {'summary': {'scandals_found': 0, 'total_fines_usd': 0, 'sanctions_matches': 0, 'governance_issues': 0, 'eu_facilities': 0, 'jurisdictions': 0}},
             'flags': [], 'recommendations': []
         }
+    def score_to_grade(score): return {'grade': 'N/A', 'color': '#888', 'description': 'Non disponible'}
+    def calculate_detailed_esg_scores(data): return {}
+    def get_esg_comparison_benchmark(sector): return {}
+    def generate_esg_recommendations_detailed(scores, threshold=50): return []
 
 # Gestion du module Black Swan (Cygne Noir)
 try:
@@ -3200,55 +3210,142 @@ elif analysis_mode == '🌱 Analyse ESG Pro':
             if data:
                 info = data['info']
                 full_name = info.get('shortName', company_name) if info else company_name
+                sector = info.get('sector', '') if info else ''
 
                 st.subheader(f"🏢 {full_name} ({ticker})")
+                if sector:
+                    st.caption(f"Secteur: {sector}")
 
                 with st.spinner("🔍 Collecte ESG (10 sources)..."):
                     analysis = analyze_greenwashing_pro(ticker, full_name, info)
 
+                # Calculer les scores détaillés
+                detailed_scores = calculate_detailed_esg_scores(analysis['esg_data'])
+                overall_grade = detailed_scores.get('overall', {}).get('grade', score_to_grade(analysis['risk_score']))
+
                 st.markdown("---")
 
-                # Score de risque
-                col1, col2, col3, col4, col5 = st.columns(5)
-                with col1:
-                    st.metric("Score Global", f"{analysis['risk_score']:.0f}/100",
-                        delta=analysis['risk_level'], delta_color="inverse" if analysis['risk_score'] < 30 else "normal")
-                with col2:
-                    st.metric("🗞️ Médias", f"{analysis['detailed_scores'].get('media', 0):.0f}/100")
-                with col3:
-                    st.metric("🌍 Environnement", f"{analysis['detailed_scores'].get('environmental', 0):.0f}/100")
-                with col4:
-                    st.metric("⚖️ Sanctions", f"{analysis['detailed_scores'].get('sanctions', 0):.0f}/100")
-                with col5:
-                    st.metric("🏛️ Gouvernance", f"{analysis['detailed_scores'].get('governance', 0):.0f}/100")
+                # === NOTATION PRINCIPALE ===
+                col_grade, col_details = st.columns([1, 3])
 
-                # Jauge
+                with col_grade:
+                    # Grande note alphabétique
+                    st.markdown(f"""
+                    <div style="text-align: center; padding: 20px; background: linear-gradient(135deg, {overall_grade['color']}22, {overall_grade['color']}44);
+                                border: 3px solid {overall_grade['color']}; border-radius: 20px;">
+                        <h1 style="font-size: 4em; margin: 0; color: {overall_grade['color']};">{overall_grade['grade']}</h1>
+                        <p style="margin: 5px 0; font-size: 1.2em;">{overall_grade['description']}</p>
+                        <p style="margin: 0; opacity: 0.7;">Score: {analysis['risk_score']:.0f}/100</p>
+                    </div>
+                    """, unsafe_allow_html=True)
+
+                with col_details:
+                    # Notes par catégorie
+                    st.markdown("#### 📊 Notes par Catégorie")
+
+                    categories = detailed_scores.get('categories', {})
+                    cat_cols = st.columns(4)
+
+                    cat_info = [
+                        ('environmental', '🌍 Environnement', cat_cols[0]),
+                        ('social', '👥 Social', cat_cols[1]),
+                        ('governance', '🏛️ Gouvernance', cat_cols[2]),
+                        ('controversy', '⚠️ Controverses', cat_cols[3]),
+                    ]
+
+                    for cat_key, cat_name, col in cat_info:
+                        cat_data = categories.get(cat_key, {})
+                        cat_grade = cat_data.get('grade', {'grade': 'N/A', 'color': '#888'})
+                        cat_score = cat_data.get('score', 0)
+
+                        with col:
+                            st.markdown(f"""
+                            <div style="text-align: center; padding: 10px; background: {cat_grade['color']}22;
+                                        border: 2px solid {cat_grade['color']}; border-radius: 12px; margin: 5px 0;">
+                                <p style="margin: 0; font-size: 0.9em;">{cat_name}</p>
+                                <h2 style="margin: 5px 0; color: {cat_grade['color']};">{cat_grade['grade']}</h2>
+                                <p style="margin: 0; opacity: 0.7; font-size: 0.8em;">{cat_score:.0f}/100</p>
+                            </div>
+                            """, unsafe_allow_html=True)
+
+                # === JAUGE AMÉLIORÉE ===
+                st.markdown("---")
+                st.markdown("#### 📈 Position sur l'Échelle de Risque ESG")
+
+                # Comparaison avec le benchmark du secteur
+                benchmark = get_esg_comparison_benchmark(sector)
+                benchmark_score = benchmark.get('overall', 38)
+
                 st.markdown(f"""
-                <div style="background: linear-gradient(to right, #27ae60, #f1c40f, #e74c3c);
-                            height: 25px; border-radius: 12px; position: relative; margin: 20px 0;">
-                    <div style="position: absolute; left: {analysis['risk_score']}%; top: -8px;
-                                width: 40px; height: 40px; background: white; border-radius: 50%;
+                <div style="position: relative; margin: 30px 0;">
+                    <div style="background: linear-gradient(to right, #27ae60, #82e0aa, #f1c40f, #e67e22, #e74c3c);
+                                height: 30px; border-radius: 15px;"></div>
+                    <div style="position: absolute; left: {analysis['risk_score']}%; top: -10px;
+                                width: 50px; height: 50px; background: white; border-radius: 50%;
                                 border: 4px solid {analysis['risk_color']}; transform: translateX(-50%);
                                 display: flex; align-items: center; justify-content: center;
-                                font-weight: bold;">{analysis['risk_score']:.0f}</div>
+                                font-weight: bold; font-size: 1.1em; box-shadow: 0 2px 10px rgba(0,0,0,0.2);">
+                        {overall_grade['grade']}
+                    </div>
+                    <div style="position: absolute; left: {benchmark_score}%; top: 35px;
+                                transform: translateX(-50%); text-align: center;">
+                        <div style="width: 2px; height: 15px; background: #666; margin: 0 auto;"></div>
+                        <span style="font-size: 0.8em; color: #666;">Moyenne secteur</span>
+                    </div>
+                </div>
+                <div style="display: flex; justify-content: space-between; margin-top: 30px; font-size: 0.8em; opacity: 0.7;">
+                    <span>A+ (Excellence)</span>
+                    <span>B (Satisfaisant)</span>
+                    <span>C (Insuffisant)</span>
+                    <span>F (Échec)</span>
                 </div>
                 """, unsafe_allow_html=True)
 
+                # Comparaison avec le secteur
+                diff_vs_sector = analysis['risk_score'] - benchmark_score
+                if diff_vs_sector < -10:
+                    st.success(f"✅ **Meilleur que la moyenne du secteur** ({abs(diff_vs_sector):.0f} points en dessous)")
+                elif diff_vs_sector > 10:
+                    st.error(f"⚠️ **Moins bon que la moyenne du secteur** ({diff_vs_sector:.0f} points au-dessus)")
+                else:
+                    st.info(f"📊 **Dans la moyenne du secteur** (±{abs(diff_vs_sector):.0f} points)")
+
                 st.markdown("---")
 
-                # Résumé
+                # === RÉSUMÉ DES DONNÉES ===
+                st.markdown("#### 📋 Données Collectées")
                 summary = analysis['esg_data']['summary']
-                col1, col2, col3, col4, col5, col6 = st.columns(6)
-                with col1: st.metric("🗞️ Scandales", summary['scandals_found'])
-                with col2: st.metric("💰 Amendes", f"${summary['total_fines_usd']:,.0f}")
-                with col3: st.metric("🚫 Sanctions", summary['sanctions_matches'])
-                with col4: st.metric("⚠️ Gouv.", summary['governance_issues'])
-                with col5: st.metric("🏭 Sites EU", summary['eu_facilities'])
-                with col6: st.metric("🌐 Pays", summary['jurisdictions'])
+                sum_cols = st.columns(6)
+                with sum_cols[0]: st.metric("🗞️ Scandales", summary['scandals_found'])
+                with sum_cols[1]: st.metric("💰 Amendes", f"${summary['total_fines_usd']:,.0f}")
+                with sum_cols[2]: st.metric("🚫 Sanctions", summary['sanctions_matches'])
+                with sum_cols[3]: st.metric("⚠️ Gouv.", summary['governance_issues'])
+                with sum_cols[4]: st.metric("🏭 Sites EU", summary['eu_facilities'])
+                with sum_cols[5]: st.metric("🌐 Pays", summary['jurisdictions'])
+
+                # === SOUS-CATÉGORIES DÉTAILLÉES ===
+                with st.expander("📊 Détails des Sous-Catégories", expanded=False):
+                    for cat_key, cat_name, _ in cat_info:
+                        cat_data = categories.get(cat_key, {})
+                        subcats = cat_data.get('subcategories', {})
+                        if subcats:
+                            st.markdown(f"**{cat_name}**")
+                            sub_cols = st.columns(len(subcats))
+                            for i, (sub_name, sub_score) in enumerate(subcats.items()):
+                                sub_grade = score_to_grade(sub_score)
+                                with sub_cols[i]:
+                                    st.markdown(f"""
+                                    <div style="text-align: center; padding: 8px; background: {sub_grade['color']}15;
+                                                border-radius: 8px; margin: 3px;">
+                                        <p style="margin: 0; font-size: 0.75em;">{sub_name.replace('_', ' ').title()}</p>
+                                        <p style="margin: 0; color: {sub_grade['color']}; font-weight: bold;">{sub_grade['grade']}</p>
+                                    </div>
+                                    """, unsafe_allow_html=True)
+                            st.markdown("---")
 
                 st.markdown("---")
 
-                # Alertes
+                # === ALERTES ===
                 if analysis['flags']:
                     st.subheader("🚩 Alertes")
                     for flag in analysis['flags']:
@@ -3259,10 +3356,50 @@ elif analysis_mode == '🌱 Analyse ESG Pro':
                         elif sev == 'MEDIUM': st.warning(msg)
                         else: st.info(msg)
 
-                # Recommandations
+                # === RECOMMANDATIONS DÉTAILLÉES ===
                 st.subheader("💡 Recommandations")
-                for rec in analysis['recommendations']:
-                    st.info(f"→ {rec}")
+
+                detailed_recs = generate_esg_recommendations_detailed(detailed_scores)
+                if detailed_recs:
+                    for rec in detailed_recs:
+                        priority_colors = {'HIGH': '#e74c3c', 'MEDIUM': '#f39c12', 'LOW': '#3498db'}
+                        priority_labels = {'HIGH': 'Priorité haute', 'MEDIUM': 'Priorité moyenne', 'LOW': 'Priorité basse'}
+
+                        st.markdown(f"""
+                        <div style="padding: 12px; margin: 8px 0; background: {priority_colors.get(rec['priority'], '#888')}15;
+                                    border-left: 4px solid {priority_colors.get(rec['priority'], '#888')}; border-radius: 8px;">
+                            <span style="background: {priority_colors.get(rec['priority'], '#888')}; color: white;
+                                        padding: 2px 8px; border-radius: 4px; font-size: 0.75em;">
+                                {priority_labels.get(rec['priority'], 'Info')}
+                            </span>
+                            <span style="margin-left: 10px; font-weight: bold;">{rec['category']}</span>
+                            <span style="float: right; opacity: 0.7;">Note: {rec['grade']}</span>
+                            <p style="margin: 8px 0 0 0;">→ {rec['recommendation']}</p>
+                        </div>
+                        """, unsafe_allow_html=True)
+                else:
+                    for rec in analysis['recommendations']:
+                        st.info(f"→ {rec}")
+
+                # Légende des notes
+                with st.expander("📖 Légende des Notes ESG"):
+                    st.markdown("""
+                    | Note | Score | Description |
+                    |------|-------|-------------|
+                    | **A+** | 0-5 | Excellence ESG - Leader du secteur |
+                    | **A** | 5-15 | Excellent - Très faible risque ESG |
+                    | **A-** | 15-25 | Très bon - Risque ESG minimal |
+                    | **B+** | 25-35 | Bon - Risque ESG faible |
+                    | **B** | 35-45 | Satisfaisant - Risque ESG modéré-faible |
+                    | **B-** | 45-55 | Acceptable - Risque ESG modéré |
+                    | **C+** | 55-65 | Moyen - Risque ESG modéré-élevé |
+                    | **C** | 65-75 | Insuffisant - Risque ESG élevé |
+                    | **C-** | 75-85 | Faible - Risque ESG très élevé |
+                    | **D** | 85-95 | Très faible - Risque ESG critique |
+                    | **F** | 95-100 | Échec - Risque ESG extrême |
+
+                    *Plus le score est bas, meilleure est la note.*
+                    """)
         else:
             st.error(f"❌ Entreprise non trouvée")
 

@@ -1208,6 +1208,333 @@ def analyze_greenwashing_pro(ticker: str, company_name: str, info: dict = None) 
     return analysis
 
 
+# ============ SYSTÈME DE NOTATION AFFINÉ ============
+
+# Seuils de notation alphabétique (score de risque -> note)
+# Plus le score de risque est bas, meilleure est la note
+GRADE_THRESHOLDS = [
+    (0, 5, 'A+', '#1a5f2a', 'Excellence ESG - Leader du secteur'),
+    (5, 15, 'A', '#27ae60', 'Excellent - Très faible risque ESG'),
+    (15, 25, 'A-', '#2ecc71', 'Très bon - Risque ESG minimal'),
+    (25, 35, 'B+', '#58d68d', 'Bon - Risque ESG faible'),
+    (35, 45, 'B', '#82e0aa', 'Satisfaisant - Risque ESG modéré-faible'),
+    (45, 55, 'B-', '#f1c40f', 'Acceptable - Risque ESG modéré'),
+    (55, 65, 'C+', '#f39c12', 'Moyen - Risque ESG modéré-élevé'),
+    (65, 75, 'C', '#e67e22', 'Insuffisant - Risque ESG élevé'),
+    (75, 85, 'C-', '#e74c3c', 'Faible - Risque ESG très élevé'),
+    (85, 95, 'D', '#c0392b', 'Très faible - Risque ESG critique'),
+    (95, 100, 'F', '#7b241c', 'Échec - Risque ESG extrême'),
+]
+
+# Pondérations détaillées par catégorie
+ESG_WEIGHTS_DETAILED = {
+    'environmental': {
+        'weight': 0.35,
+        'subcategories': {
+            'emissions': 0.30,
+            'resource_use': 0.25,
+            'pollution': 0.25,
+            'biodiversity': 0.20,
+        }
+    },
+    'social': {
+        'weight': 0.30,
+        'subcategories': {
+            'labor_practices': 0.30,
+            'health_safety': 0.25,
+            'community': 0.25,
+            'human_rights': 0.20,
+        }
+    },
+    'governance': {
+        'weight': 0.25,
+        'subcategories': {
+            'board_structure': 0.30,
+            'ethics': 0.30,
+            'transparency': 0.25,
+            'shareholder_rights': 0.15,
+        }
+    },
+    'controversy': {
+        'weight': 0.10,
+        'subcategories': {
+            'media_scandals': 0.40,
+            'legal_issues': 0.35,
+            'sanctions': 0.25,
+        }
+    }
+}
+
+
+def score_to_grade(score: float) -> Dict[str, Any]:
+    """
+    Convertit un score de risque (0-100) en note alphabétique.
+
+    Args:
+        score: Score de risque (0 = excellent, 100 = catastrophique)
+
+    Returns:
+        Dict avec grade, color, description
+    """
+    for min_val, max_val, grade, color, description in GRADE_THRESHOLDS:
+        if min_val <= score < max_val:
+            return {
+                'grade': grade,
+                'color': color,
+                'description': description,
+                'score': score,
+            }
+
+    # Par défaut si score >= 100
+    return {
+        'grade': 'F',
+        'color': '#7b241c',
+        'description': 'Risque ESG extrême',
+        'score': min(100, score),
+    }
+
+
+def calculate_detailed_esg_scores(esg_data: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Calcule des scores ESG détaillés avec sous-catégories.
+
+    Args:
+        esg_data: Données ESG brutes
+
+    Returns:
+        Dict avec scores détaillés par catégorie et sous-catégorie
+    """
+    detailed = {
+        'categories': {},
+        'overall': {},
+        'grades': {},
+    }
+
+    risk_scores = esg_data.get('risk_scores', {})
+    sources = esg_data.get('sources', {})
+
+    # === ENVIRONNEMENT ===
+    env_score = risk_scores.get('environmental', 0)
+    epa = sources.get('epa_echo', {})
+    eprtr = sources.get('eprtr', {})
+
+    env_subcategories = {
+        'emissions': min(100, (eprtr.get('total_emissions', 0) / 10000) if eprtr.get('available') else env_score * 0.3),
+        'pollution': min(100, env_score * 0.8 if epa.get('severity') in ['HIGH', 'CRITICAL'] else env_score * 0.5),
+        'compliance': 100 - (eprtr.get('compliance_score', 100) if eprtr.get('available') else 100 - env_score),
+        'fines': min(100, (epa.get('total_penalties', 0) / 50000) if epa.get('available') else 0),
+    }
+
+    detailed['categories']['environmental'] = {
+        'score': env_score,
+        'grade': score_to_grade(env_score),
+        'subcategories': env_subcategories,
+        'weight': ESG_WEIGHTS_DETAILED['environmental']['weight'],
+    }
+
+    # === SOCIAL ===
+    social_score = risk_scores.get('social', 0)
+    gdelt = sources.get('gdelt', {})
+
+    # Analyser les thèmes GDELT pour les sous-catégories sociales
+    themes = dict(gdelt.get('top_themes', [])) if gdelt.get('available') else {}
+
+    social_subcategories = {
+        'labor_practices': min(100, themes.get('LABOR', 0) * 10 + social_score * 0.3),
+        'health_safety': min(100, themes.get('HEALTH', 0) * 10 + social_score * 0.2),
+        'community': min(100, themes.get('PROTEST', 0) * 10 + social_score * 0.2),
+        'human_rights': min(100, themes.get('HUMAN_RIGHTS', 0) * 10 + social_score * 0.3),
+    }
+
+    detailed['categories']['social'] = {
+        'score': social_score,
+        'grade': score_to_grade(social_score),
+        'subcategories': social_subcategories,
+        'weight': ESG_WEIGHTS_DETAILED['social']['weight'],
+    }
+
+    # === GOUVERNANCE ===
+    gov_score = risk_scores.get('governance', 0)
+    sec = sources.get('sec_edgar', {})
+    yf_esg = sources.get('yfinance', {})
+
+    gov_issues = sec.get('governance_issues', []) if sec.get('available') else []
+    controversy = yf_esg.get('controversy_level', 0) or 0
+
+    gov_subcategories = {
+        'board_structure': min(100, len([i for i in gov_issues if 'board' in str(i).lower()]) * 20 + gov_score * 0.3),
+        'ethics': min(100, controversy * 15 + gov_score * 0.3),
+        'transparency': min(100, len([i for i in gov_issues if 'disclosure' in str(i).lower()]) * 15 + gov_score * 0.2),
+        'executive_compensation': min(100, len([i for i in gov_issues if 'compensation' in str(i).lower()]) * 20 + gov_score * 0.2),
+    }
+
+    detailed['categories']['governance'] = {
+        'score': gov_score,
+        'grade': score_to_grade(gov_score),
+        'subcategories': gov_subcategories,
+        'weight': ESG_WEIGHTS_DETAILED['governance']['weight'],
+    }
+
+    # === CONTROVERSES ===
+    media_score = risk_scores.get('media', 0)
+    sanctions_score = risk_scores.get('sanctions', 0)
+
+    controversy_subcategories = {
+        'media_scandals': media_score,
+        'legal_issues': min(100, (epa.get('total_penalties', 0) / 100000) * 10 if epa.get('available') else 0),
+        'sanctions': sanctions_score,
+    }
+
+    controversy_combined = (media_score * 0.4 + sanctions_score * 0.35 +
+                           controversy_subcategories['legal_issues'] * 0.25)
+
+    detailed['categories']['controversy'] = {
+        'score': controversy_combined,
+        'grade': score_to_grade(controversy_combined),
+        'subcategories': controversy_subcategories,
+        'weight': ESG_WEIGHTS_DETAILED['controversy']['weight'],
+    }
+
+    # === SCORE GLOBAL AFFINÉ ===
+    total_weighted = sum(
+        cat_data['score'] * cat_data['weight']
+        for cat_data in detailed['categories'].values()
+    )
+
+    detailed['overall'] = {
+        'score': round(total_weighted, 1),
+        'grade': score_to_grade(total_weighted),
+    }
+
+    # Générer les grades pour chaque catégorie
+    detailed['grades'] = {
+        cat: score_to_grade(data['score'])
+        for cat, data in detailed['categories'].items()
+    }
+
+    return detailed
+
+
+def get_esg_comparison_benchmark(sector: str = None) -> Dict[str, float]:
+    """
+    Retourne les scores moyens du secteur pour comparaison.
+
+    Args:
+        sector: Nom du secteur (optionnel)
+
+    Returns:
+        Dict avec scores moyens par catégorie
+    """
+    # Benchmarks par défaut (moyennes du marché)
+    default_benchmarks = {
+        'environmental': 45,
+        'social': 40,
+        'governance': 35,
+        'controversy': 25,
+        'overall': 38,
+    }
+
+    # Benchmarks par secteur (valeurs approximatives)
+    sector_benchmarks = {
+        'Technology': {'environmental': 35, 'social': 45, 'governance': 40, 'controversy': 30, 'overall': 38},
+        'Energy': {'environmental': 65, 'social': 50, 'governance': 45, 'controversy': 55, 'overall': 54},
+        'Healthcare': {'environmental': 30, 'social': 55, 'governance': 40, 'controversy': 40, 'overall': 42},
+        'Financial': {'environmental': 25, 'social': 40, 'governance': 50, 'controversy': 45, 'overall': 40},
+        'Consumer': {'environmental': 45, 'social': 50, 'governance': 35, 'controversy': 35, 'overall': 42},
+        'Industrial': {'environmental': 55, 'social': 45, 'governance': 40, 'controversy': 40, 'overall': 45},
+        'Materials': {'environmental': 60, 'social': 45, 'governance': 40, 'controversy': 45, 'overall': 48},
+        'Utilities': {'environmental': 55, 'social': 35, 'governance': 35, 'controversy': 30, 'overall': 39},
+        'Real Estate': {'environmental': 40, 'social': 35, 'governance': 40, 'controversy': 25, 'overall': 35},
+        'Communication': {'environmental': 30, 'social': 50, 'governance': 45, 'controversy': 40, 'overall': 42},
+    }
+
+    if sector:
+        for key in sector_benchmarks:
+            if key.lower() in sector.lower():
+                return sector_benchmarks[key]
+
+    return default_benchmarks
+
+
+def generate_esg_recommendations_detailed(detailed_scores: Dict[str, Any], threshold: float = 50) -> List[Dict[str, Any]]:
+    """
+    Génère des recommandations détaillées basées sur les scores.
+
+    Args:
+        detailed_scores: Scores détaillés par catégorie
+        threshold: Seuil au-dessus duquel une recommandation est émise
+
+    Returns:
+        Liste de recommandations avec priorité
+    """
+    recommendations = []
+
+    for category, data in detailed_scores.get('categories', {}).items():
+        score = data.get('score', 0)
+        subcategories = data.get('subcategories', {})
+
+        if score >= threshold:
+            # Trouver les sous-catégories problématiques
+            problematic = [
+                (sub, sub_score) for sub, sub_score in subcategories.items()
+                if sub_score >= threshold
+            ]
+
+            category_names = {
+                'environmental': 'Environnement',
+                'social': 'Social',
+                'governance': 'Gouvernance',
+                'controversy': 'Controverses',
+            }
+
+            priority = 'HIGH' if score >= 70 else ('MEDIUM' if score >= 50 else 'LOW')
+
+            rec = {
+                'category': category_names.get(category, category),
+                'priority': priority,
+                'score': score,
+                'grade': data.get('grade', {}).get('grade', 'N/A'),
+                'issues': problematic,
+                'recommendation': '',
+            }
+
+            # Générer la recommandation spécifique
+            if category == 'environmental':
+                if 'emissions' in dict(problematic):
+                    rec['recommendation'] = "Réduire les émissions de GES via des énergies renouvelables"
+                elif 'pollution' in dict(problematic):
+                    rec['recommendation'] = "Améliorer les processus de traitement des déchets"
+                else:
+                    rec['recommendation'] = "Renforcer les politiques environnementales"
+
+            elif category == 'social':
+                if 'labor_practices' in dict(problematic):
+                    rec['recommendation'] = "Améliorer les conditions de travail et la rémunération"
+                elif 'health_safety' in dict(problematic):
+                    rec['recommendation'] = "Renforcer les protocoles de santé et sécurité"
+                else:
+                    rec['recommendation'] = "Développer les initiatives sociales"
+
+            elif category == 'governance':
+                if 'ethics' in dict(problematic):
+                    rec['recommendation'] = "Renforcer le code éthique et la formation"
+                elif 'transparency' in dict(problematic):
+                    rec['recommendation'] = "Améliorer la transparence des rapports"
+                else:
+                    rec['recommendation'] = "Moderniser la structure de gouvernance"
+
+            elif category == 'controversy':
+                rec['recommendation'] = "Améliorer la communication de crise et les relations publiques"
+
+            recommendations.append(rec)
+
+    # Trier par priorité
+    priority_order = {'HIGH': 0, 'MEDIUM': 1, 'LOW': 2}
+    recommendations.sort(key=lambda x: priority_order.get(x['priority'], 3))
+
+    return recommendations
+
+
 # ============ AFFICHAGE SIMPLE ============
 
 def get_simple_esg_display(ticker: str) -> Dict[str, Any]:

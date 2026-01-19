@@ -1027,6 +1027,180 @@ class ComparativeAnalysis:
         return fig
 
     # =========================================================================
+    # CORRELATION METHODS
+    # =========================================================================
+
+    def calculate_correlation_matrix(self, period_key: str = "1A") -> pd.DataFrame:
+        """
+        Calcule la matrice de corrélation entre les entreprises.
+
+        Args:
+            period_key: Clé de période pour les données historiques
+
+        Returns:
+            DataFrame avec la matrice de corrélation
+        """
+        if not self.valid_companies:
+            return pd.DataFrame()
+
+        # Récupérer les données de prix
+        price_data = self.fetch_price_data(period_key)
+
+        # Créer un DataFrame avec les rendements quotidiens
+        returns_data = {}
+
+        for company in self.valid_companies:
+            if company.ticker in price_data:
+                df = price_data[company.ticker]
+                if not df.empty and 'Close' in df.columns:
+                    # Calculer les rendements quotidiens
+                    returns = df['Close'].pct_change().dropna()
+                    returns_data[company.ticker] = returns
+
+        if len(returns_data) < 2:
+            return pd.DataFrame()
+
+        # Créer un DataFrame aligné
+        returns_df = pd.DataFrame(returns_data)
+
+        # Calculer la matrice de corrélation
+        correlation_matrix = returns_df.corr()
+
+        return correlation_matrix
+
+    def plot_correlation_matrix(self, period_key: str = "1A") -> go.Figure:
+        """
+        Affiche la matrice de corrélation sous forme de heatmap.
+
+        Args:
+            period_key: Clé de période pour les données historiques
+
+        Returns:
+            Figure Plotly avec la heatmap de corrélation
+        """
+        corr_matrix = self.calculate_correlation_matrix(period_key)
+
+        if corr_matrix.empty:
+            fig = go.Figure()
+            fig.add_annotation(
+                text="Données insuffisantes pour calculer la corrélation",
+                xref="paper", yref="paper",
+                x=0.5, y=0.5, showarrow=False
+            )
+            return fig
+
+        # Créer les labels avec les noms des entreprises
+        labels = []
+        for ticker in corr_matrix.columns:
+            company = next((c for c in self.valid_companies if c.ticker == ticker), None)
+            if company:
+                labels.append(f"{ticker}<br>({company.name[:15]}...)" if len(company.name) > 15 else f"{ticker}<br>({company.name})")
+            else:
+                labels.append(ticker)
+
+        # Créer la heatmap
+        fig = go.Figure(data=go.Heatmap(
+            z=corr_matrix.values,
+            x=labels,
+            y=labels,
+            colorscale=[
+                [0, '#e74c3c'],      # Rouge (corrélation négative)
+                [0.5, '#f5f5f5'],    # Blanc (pas de corrélation)
+                [1, '#2ecc71']       # Vert (corrélation positive)
+            ],
+            zmin=-1,
+            zmax=1,
+            text=[[f"{val:.3f}" for val in row] for row in corr_matrix.values],
+            texttemplate="%{text}",
+            textfont={"size": 14, "color": "black"},
+            hovertemplate="<b>%{x}</b> vs <b>%{y}</b><br>Corrélation: %{z:.4f}<extra></extra>",
+            showscale=True,
+            colorbar=dict(
+                title="Corrélation",
+                tickvals=[-1, -0.5, 0, 0.5, 1],
+                ticktext=["-1 (Inverse)", "-0.5", "0 (Aucune)", "0.5", "1 (Parfaite)"]
+            )
+        ))
+
+        fig.update_layout(
+            title=dict(
+                text="🔗 Matrice de Corrélation des Rendements",
+                font=dict(size=18)
+            ),
+            xaxis=dict(
+                title="",
+                tickangle=0,
+                side="bottom"
+            ),
+            yaxis=dict(
+                title="",
+                autorange="reversed"
+            ),
+            height=500,
+            template='plotly_dark'
+        )
+
+        return fig
+
+    def get_correlation_insights(self, period_key: str = "1A") -> List[str]:
+        """
+        Génère des insights sur les corrélations.
+
+        Returns:
+            Liste de strings avec les insights
+        """
+        corr_matrix = self.calculate_correlation_matrix(period_key)
+
+        if corr_matrix.empty:
+            return ["Données insuffisantes pour analyser les corrélations."]
+
+        insights = []
+        n = len(corr_matrix)
+
+        # Analyser chaque paire
+        pairs_analyzed = set()
+
+        for i, ticker1 in enumerate(corr_matrix.columns):
+            for j, ticker2 in enumerate(corr_matrix.columns):
+                if i >= j:  # Éviter les doublons et la diagonale
+                    continue
+
+                pair_key = tuple(sorted([ticker1, ticker2]))
+                if pair_key in pairs_analyzed:
+                    continue
+                pairs_analyzed.add(pair_key)
+
+                corr = corr_matrix.loc[ticker1, ticker2]
+
+                if corr > 0.8:
+                    insights.append(f"🟢 **{ticker1}** et **{ticker2}** sont fortement corrélés ({corr:.2f}). Ils évoluent généralement dans le même sens.")
+                elif corr > 0.5:
+                    insights.append(f"🔵 **{ticker1}** et **{ticker2}** sont modérément corrélés ({corr:.2f}). Tendance similaire mais avec des divergences.")
+                elif corr > -0.5:
+                    insights.append(f"⚪ **{ticker1}** et **{ticker2}** ont une faible corrélation ({corr:.2f}). Bonne diversification potentielle.")
+                elif corr > -0.8:
+                    insights.append(f"🟡 **{ticker1}** et **{ticker2}** sont négativement corrélés ({corr:.2f}). Tendances opposées modérées.")
+                else:
+                    insights.append(f"🔴 **{ticker1}** et **{ticker2}** sont fortement inversement corrélés ({corr:.2f}). Excellent pour la couverture.")
+
+        # Ajouter un résumé
+        all_corrs = []
+        for i in range(n):
+            for j in range(i+1, n):
+                all_corrs.append(corr_matrix.iloc[i, j])
+
+        if all_corrs:
+            avg_corr = np.mean(all_corrs)
+            if avg_corr > 0.7:
+                insights.insert(0, f"📊 **Corrélation moyenne élevée ({avg_corr:.2f})**: Ces actions évoluent souvent ensemble. Diversification limitée.")
+            elif avg_corr > 0.3:
+                insights.insert(0, f"📊 **Corrélation moyenne modérée ({avg_corr:.2f})**: Mix équilibré entre actions corrélées et indépendantes.")
+            else:
+                insights.insert(0, f"📊 **Corrélation moyenne faible ({avg_corr:.2f})**: Bonne diversification - les actions évoluent de manière relativement indépendante.")
+
+        return insights
+
+    # =========================================================================
     # EXPORT METHODS
     # =========================================================================
 
@@ -1272,7 +1446,7 @@ def render_comparative_analysis_tab(current_ticker: str = None):
         st.markdown("---")
         st.markdown("### 📈 Analyses Détaillées")
 
-        detail_tabs = st.tabs(["🎯 Radar", "💰 Bénéfices", "📈 Dividendes"])
+        detail_tabs = st.tabs(["🎯 Radar", "💰 Bénéfices", "📈 Dividendes", "🔗 Corrélation"])
 
         with detail_tabs[0]:
             fig_radar = analysis.plot_radar_chart()
@@ -1286,6 +1460,41 @@ def render_comparative_analysis_tab(current_ticker: str = None):
         with detail_tabs[2]:
             fig_div = analysis.plot_dividend_comparison()
             st.plotly_chart(fig_div, use_container_width=True)
+
+        with detail_tabs[3]:
+            st.markdown("#### 🔗 Corrélation des Rendements")
+            st.markdown("""
+            La matrice de corrélation montre comment les rendements des différentes actions
+            évoluent les uns par rapport aux autres. Une corrélation proche de **1** indique
+            que les actions évoluent ensemble, proche de **-1** qu'elles évoluent en sens inverse,
+            et proche de **0** qu'elles sont indépendantes.
+            """)
+
+            corr_period = st.selectbox(
+                "Période d'analyse",
+                options=["1M", "3M", "6M", "1A", "3A", "5A"],
+                index=3,
+                key="corr_period",
+                help="Période sur laquelle calculer la corrélation"
+            )
+
+            fig_corr = analysis.plot_correlation_matrix(corr_period)
+            st.plotly_chart(fig_corr, use_container_width=True)
+
+            # Afficher les insights
+            st.markdown("#### 💡 Analyse des Corrélations")
+            insights = analysis.get_correlation_insights(corr_period)
+            for insight in insights:
+                st.markdown(insight)
+
+            # Recommandation de diversification
+            corr_matrix = analysis.calculate_correlation_matrix(corr_period)
+            if not corr_matrix.empty:
+                avg_corr = corr_matrix.values[np.triu_indices_from(corr_matrix.values, k=1)].mean()
+                if avg_corr > 0.7:
+                    st.warning("⚠️ **Attention**: Ces actions sont fortement corrélées. Pour une meilleure diversification, envisagez d'ajouter des actifs de secteurs différents.")
+                elif avg_corr < 0.3:
+                    st.success("✅ **Bonne diversification**: Ces actions ont une corrélation faible, ce qui réduit le risque global du portefeuille.")
 
         # =====================================================================
         # Scorecard
