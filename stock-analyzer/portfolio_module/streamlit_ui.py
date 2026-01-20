@@ -5,16 +5,18 @@ Interactive interface for portfolio tracking and analysis.
 """
 
 import streamlit as st
+import streamlit.components.v1 as components
 import pandas as pd
 import numpy as np
 import plotly.graph_objects as go
 import plotly.express as px
 from plotly.subplots import make_subplots
 from typing import Optional, Dict, Any, List
-from datetime import datetime
+from datetime import datetime, timedelta
 import json
 import tempfile
 import os
+import yfinance as yf
 
 from .trade_republic import TradeRepublicClient, Portfolio, Position, create_sample_portfolio
 from .analytics import PortfolioAnalyzer, PerformanceMetrics, AllocationAnalysis
@@ -897,115 +899,422 @@ def render_geographic_tab(portfolio: Portfolio):
 # PERFORMANCE HISTORY TAB
 # ==============================================================================
 
+# Indices de référence disponibles
+BENCHMARK_INDICES = {
+    "S&P 500": "^GSPC",
+    "CAC 40": "^FCHI",
+    "NASDAQ 100": "^NDX",
+    "DAX": "^GDAXI",
+    "EURO STOXX 50": "^STOXX50E",
+    "FTSE 100": "^FTSE",
+    "Nikkei 225": "^N225",
+    "MSCI World": "URTH",
+}
+
+# Périodes disponibles
+PERFORMANCE_PERIODS = {
+    "1 Jour": "1d",
+    "1 Semaine": "5d",
+    "1 Mois": "1mo",
+    "3 Mois": "3mo",
+    "6 Mois": "6mo",
+    "YTD": "ytd",
+    "1 An": "1y",
+    "2 Ans": "2y",
+    "5 Ans": "5y",
+    "Max": "max"
+}
+
+
+def get_portfolio_historical_performance(portfolio: Portfolio, period: str = "1y") -> pd.DataFrame:
+    """
+    Calcule la performance historique du portefeuille basée sur les positions actuelles.
+
+    Args:
+        portfolio: Portfolio à analyser
+        period: Période d'historique (1d, 5d, 1mo, 3mo, 6mo, ytd, 1y, 2y, 5y, max)
+
+    Returns:
+        DataFrame avec la valeur du portefeuille dans le temps
+    """
+    if not portfolio.positions:
+        return pd.DataFrame()
+
+    # Récupérer l'historique de chaque position
+    all_histories = {}
+    weights = {}
+    total_invested = portfolio.total_invested
+
+    for pos in portfolio.positions:
+        try:
+            ticker = yf.Ticker(pos.symbol)
+            hist = ticker.history(period=period)
+
+            if not hist.empty:
+                all_histories[pos.symbol] = hist['Close']
+                # Poids basé sur le coût total de la position
+                weights[pos.symbol] = pos.total_cost / total_invested if total_invested > 0 else 0
+        except Exception as e:
+            print(f"Erreur récupération {pos.symbol}: {e}")
+            continue
+
+    if not all_histories:
+        return pd.DataFrame()
+
+    # Combiner les historiques
+    combined_df = pd.DataFrame(all_histories)
+    combined_df = combined_df.dropna()
+
+    if combined_df.empty:
+        return pd.DataFrame()
+
+    # Calculer les rendements normalisés (base 100)
+    normalized_df = combined_df.copy()
+    for col in normalized_df.columns:
+        first_val = normalized_df[col].iloc[0]
+        if first_val > 0:
+            normalized_df[col] = (normalized_df[col] / first_val) * 100
+
+    # Calculer la valeur pondérée du portefeuille
+    portfolio_value = pd.Series(index=normalized_df.index, dtype=float)
+    portfolio_value[:] = 0
+
+    for symbol in normalized_df.columns:
+        if symbol in weights:
+            portfolio_value += normalized_df[symbol] * weights[symbol]
+
+    result_df = pd.DataFrame({
+        'date': portfolio_value.index,
+        'portfolio_value': portfolio_value.values,
+        'portfolio_return': (portfolio_value.values - 100)  # Rendement en %
+    })
+    result_df['date'] = pd.to_datetime(result_df['date']).dt.tz_localize(None)
+
+    return result_df
+
+
+def get_benchmark_performance(benchmark_symbol: str, period: str = "1y") -> pd.DataFrame:
+    """
+    Récupère la performance d'un indice de référence.
+
+    Args:
+        benchmark_symbol: Symbole de l'indice (ex: ^GSPC pour S&P 500)
+        period: Période d'historique
+
+    Returns:
+        DataFrame avec la performance de l'indice normalisée (base 100)
+    """
+    try:
+        ticker = yf.Ticker(benchmark_symbol)
+        hist = ticker.history(period=period)
+
+        if hist.empty:
+            return pd.DataFrame()
+
+        # Normaliser (base 100)
+        first_val = hist['Close'].iloc[0]
+        normalized = (hist['Close'] / first_val) * 100
+
+        result_df = pd.DataFrame({
+            'date': normalized.index,
+            'value': normalized.values,
+            'return': (normalized.values - 100)  # Rendement en %
+        })
+        result_df['date'] = pd.to_datetime(result_df['date']).dt.tz_localize(None)
+
+        return result_df
+
+    except Exception as e:
+        print(f"Erreur récupération benchmark {benchmark_symbol}: {e}")
+        return pd.DataFrame()
+
+
 def render_performance_history_tab(portfolio: Portfolio):
-    """Affiche l'historique de performance du portefeuille."""
-    st.markdown("### 📈 Performance Historique")
+    """Affiche l'historique de performance du portefeuille avec comparaison aux indices."""
+    st.markdown("### 📈 Performance du Portefeuille")
 
     # Informations sur la création
     if portfolio.creation_date:
         days_since_creation = (datetime.now() - portfolio.creation_date).days
         st.info(f"📅 Portefeuille créé le **{portfolio.creation_date.strftime('%d/%m/%Y à %H:%M')}** (il y a {days_since_creation} jour(s))")
 
-    # Vérifier s'il y a un historique
-    if portfolio.historical_values and len(portfolio.historical_values) > 0:
-        # Créer un DataFrame à partir de l'historique
-        hist_df = pd.DataFrame(portfolio.historical_values)
-        hist_df['date'] = pd.to_datetime(hist_df['date'])
-        hist_df = hist_df.sort_values('date')
+    # === SÉLECTEURS ===
+    col1, col2, col3 = st.columns([2, 2, 2])
 
-        # Graphique de l'évolution de la valeur
-        st.markdown("#### 💰 Évolution de la Valeur du Portefeuille")
+    with col1:
+        selected_period_label = st.selectbox(
+            "📅 Période",
+            options=list(PERFORMANCE_PERIODS.keys()),
+            index=6,  # Default: 1 An
+            help="Sélectionnez la période d'analyse"
+        )
+        selected_period = PERFORMANCE_PERIODS[selected_period_label]
 
-        fig_value = go.Figure()
-
-        # Ligne de la valeur totale
-        fig_value.add_trace(go.Scatter(
-            x=hist_df['date'],
-            y=hist_df['total_value'],
-            mode='lines+markers',
-            name='Valeur totale',
-            line=dict(color='#3498db', width=2),
-            fill='tozeroy',
-            fillcolor='rgba(52, 152, 219, 0.1)'
-        ))
-
-        # Ligne du capital investi
-        fig_value.add_trace(go.Scatter(
-            x=hist_df['date'],
-            y=hist_df['total_invested'],
-            mode='lines',
-            name='Capital investi',
-            line=dict(color='#95a5a6', width=2, dash='dash')
-        ))
-
-        fig_value.update_layout(
-            height=400,
-            xaxis_title="Date",
-            yaxis_title="Valeur (€)",
-            hovermode='x unified',
-            legend=dict(orientation="h", yanchor="bottom", y=1.02)
+    with col2:
+        selected_benchmarks = st.multiselect(
+            "📊 Indices de comparaison",
+            options=list(BENCHMARK_INDICES.keys()),
+            default=["S&P 500", "CAC 40"],
+            help="Sélectionnez les indices pour comparer votre performance"
         )
 
-        st.plotly_chart(fig_value, use_container_width=True)
-
-        # Graphique du P/L
-        st.markdown("#### 📊 Évolution du Profit/Perte")
-
-        colors = ['#2ecc71' if v >= 0 else '#e74c3c' for v in hist_df['profit_loss']]
-
-        fig_pl = go.Figure()
-        fig_pl.add_trace(go.Bar(
-            x=hist_df['date'],
-            y=hist_df['profit_loss'],
-            marker_color=colors,
-            name='P/L (€)'
-        ))
-
-        fig_pl.add_hline(y=0, line_dash="dash", line_color="gray")
-
-        fig_pl.update_layout(
-            height=300,
-            xaxis_title="Date",
-            yaxis_title="Profit/Perte (€)"
+    with col3:
+        chart_mode = st.radio(
+            "Type de graphique",
+            options=["Plotly (interactif)", "TradingView"],
+            horizontal=True
         )
 
-        st.plotly_chart(fig_pl, use_container_width=True)
+    # === CALCUL DE LA PERFORMANCE ===
+    with st.spinner("Calcul de la performance..."):
+        portfolio_perf = get_portfolio_historical_performance(portfolio, selected_period)
 
-        # Statistiques
-        st.markdown("#### 📈 Statistiques de Performance")
+        # Récupérer les performances des benchmarks
+        benchmark_data = {}
+        for bench_name in selected_benchmarks:
+            bench_symbol = BENCHMARK_INDICES[bench_name]
+            bench_perf = get_benchmark_performance(bench_symbol, selected_period)
+            if not bench_perf.empty:
+                benchmark_data[bench_name] = bench_perf
 
-        col1, col2, col3, col4 = st.columns(4)
+    # === MÉTRIQUES DE PERFORMANCE ===
+    if not portfolio_perf.empty:
+        st.markdown("---")
+        st.markdown("#### 📊 Performance sur la période")
 
-        with col1:
-            initial_value = hist_df['total_value'].iloc[0]
-            current_value = hist_df['total_value'].iloc[-1]
-            total_return = ((current_value - initial_value) / initial_value) * 100 if initial_value > 0 else 0
-            st.metric("Rendement Total", f"{total_return:+.2f}%")
+        # Calcul des métriques
+        portfolio_return = portfolio_perf['portfolio_return'].iloc[-1]
 
-        with col2:
-            max_value = hist_df['total_value'].max()
-            st.metric("Valeur Max", f"{max_value:,.2f} €")
+        cols = st.columns(len(selected_benchmarks) + 1)
 
-        with col3:
-            min_value = hist_df['total_value'].min()
-            st.metric("Valeur Min", f"{min_value:,.2f} €")
+        with cols[0]:
+            color = "normal" if portfolio_return >= 0 else "inverse"
+            st.metric(
+                "🎯 Mon Portefeuille",
+                f"{portfolio_return:+.2f}%",
+                delta=f"vs période",
+                delta_color=color
+            )
 
-        with col4:
-            if len(hist_df) > 1:
-                volatility = hist_df['profit_loss_percent'].std()
-                st.metric("Volatilité P/L", f"{volatility:.2f}%")
-            else:
-                st.metric("Volatilité P/L", "N/A")
+        for i, bench_name in enumerate(selected_benchmarks):
+            if bench_name in benchmark_data:
+                bench_return = benchmark_data[bench_name]['return'].iloc[-1]
+                diff = portfolio_return - bench_return
+                with cols[i + 1]:
+                    st.metric(
+                        f"📈 {bench_name}",
+                        f"{bench_return:+.2f}%",
+                        delta=f"{diff:+.2f}% vs Portef.",
+                        delta_color="normal" if diff >= 0 else "inverse"
+                    )
+
+        # === GRAPHIQUE ===
+        st.markdown("---")
+
+        if chart_mode == "Plotly (interactif)":
+            st.markdown("#### 📈 Performance comparée (Base 100)")
+
+            fig = go.Figure()
+
+            # Ligne du portefeuille
+            fig.add_trace(go.Scatter(
+                x=portfolio_perf['date'],
+                y=portfolio_perf['portfolio_value'],
+                mode='lines',
+                name='Mon Portefeuille',
+                line=dict(color='#3498db', width=3),
+                hovertemplate='%{x|%d/%m/%Y}<br>Valeur: %{y:.2f}<br>Rendement: %{customdata:+.2f}%<extra>Portefeuille</extra>',
+                customdata=portfolio_perf['portfolio_return']
+            ))
+
+            # Lignes des benchmarks
+            benchmark_colors = ['#e74c3c', '#2ecc71', '#f39c12', '#9b59b6', '#1abc9c', '#e67e22']
+            for i, (bench_name, bench_df) in enumerate(benchmark_data.items()):
+                # Aligner les dates
+                merged = portfolio_perf[['date']].merge(
+                    bench_df[['date', 'value', 'return']],
+                    on='date',
+                    how='inner'
+                )
+                if not merged.empty:
+                    fig.add_trace(go.Scatter(
+                        x=merged['date'],
+                        y=merged['value'],
+                        mode='lines',
+                        name=bench_name,
+                        line=dict(color=benchmark_colors[i % len(benchmark_colors)], width=2, dash='dash'),
+                        hovertemplate='%{x|%d/%m/%Y}<br>Valeur: %{y:.2f}<br>Rendement: %{customdata:+.2f}%<extra>' + bench_name + '</extra>',
+                        customdata=merged['return']
+                    ))
+
+            # Ligne de base à 100
+            fig.add_hline(y=100, line_dash="dot", line_color="gray", opacity=0.5)
+
+            fig.update_layout(
+                height=500,
+                xaxis_title="Date",
+                yaxis_title="Valeur (Base 100)",
+                hovermode='x unified',
+                legend=dict(
+                    orientation="h",
+                    yanchor="bottom",
+                    y=1.02,
+                    xanchor="center",
+                    x=0.5
+                ),
+                template='plotly_dark'
+            )
+
+            st.plotly_chart(fig, use_container_width=True)
+
+            # === GRAPHIQUE DES RENDEMENTS EN % ===
+            st.markdown("#### 📊 Rendement cumulé (%)")
+
+            fig_return = go.Figure()
+
+            # Barre du portefeuille
+            fig_return.add_trace(go.Scatter(
+                x=portfolio_perf['date'],
+                y=portfolio_perf['portfolio_return'],
+                mode='lines',
+                name='Mon Portefeuille',
+                line=dict(color='#3498db', width=2),
+                fill='tozeroy',
+                fillcolor='rgba(52, 152, 219, 0.2)'
+            ))
+
+            # Lignes des benchmarks
+            for i, (bench_name, bench_df) in enumerate(benchmark_data.items()):
+                merged = portfolio_perf[['date']].merge(
+                    bench_df[['date', 'return']],
+                    on='date',
+                    how='inner'
+                )
+                if not merged.empty:
+                    fig_return.add_trace(go.Scatter(
+                        x=merged['date'],
+                        y=merged['return'],
+                        mode='lines',
+                        name=bench_name,
+                        line=dict(color=benchmark_colors[i % len(benchmark_colors)], width=2, dash='dash')
+                    ))
+
+            fig_return.add_hline(y=0, line_dash="solid", line_color="gray")
+
+            fig_return.update_layout(
+                height=350,
+                xaxis_title="Date",
+                yaxis_title="Rendement (%)",
+                hovermode='x unified',
+                legend=dict(orientation="h", yanchor="bottom", y=1.02),
+                template='plotly_dark'
+            )
+
+            st.plotly_chart(fig_return, use_container_width=True)
+
+        else:
+            # Mode TradingView
+            st.markdown("#### 📊 Comparaison avec TradingView")
+
+            # Créer les symboles pour TradingView
+            tv_symbols = []
+            for bench_name in selected_benchmarks[:4]:  # Max 4 pour TradingView
+                symbol = BENCHMARK_INDICES[bench_name]
+                # Convertir les symboles Yahoo en TradingView
+                tv_mapping = {
+                    "^GSPC": "SP:SPX",
+                    "^FCHI": "EURONEXT:PX1",
+                    "^NDX": "NASDAQ:NDX",
+                    "^GDAXI": "XETR:DAX",
+                    "^STOXX50E": "EUREX:FESX1!",
+                    "^FTSE": "LSE:UKX",
+                    "^N225": "TVC:NI225",
+                    "URTH": "AMEX:URTH"
+                }
+                if symbol in tv_mapping:
+                    tv_symbols.append(tv_mapping[symbol])
+
+            # Widget TradingView de comparaison
+            symbols_json = ", ".join([f'"{s}"' for s in tv_symbols[:4]])
+
+            tradingview_html = f"""
+            <!-- TradingView Widget BEGIN -->
+            <div class="tradingview-widget-container">
+              <div id="tradingview_comparison"></div>
+              <script type="text/javascript" src="https://s3.tradingview.com/tv.js"></script>
+              <script type="text/javascript">
+              new TradingView.widget({{
+                "width": "100%",
+                "height": 500,
+                "symbol": "{tv_symbols[0] if tv_symbols else 'SP:SPX'}",
+                "interval": "D",
+                "timezone": "Europe/Paris",
+                "theme": "dark",
+                "style": "2",
+                "locale": "fr",
+                "toolbar_bg": "#f1f3f6",
+                "enable_publishing": false,
+                "hide_side_toolbar": false,
+                "allow_symbol_change": true,
+                "compareSymbols": [{symbols_json}],
+                "container_id": "tradingview_comparison"
+              }});
+              </script>
+            </div>
+            <!-- TradingView Widget END -->
+            """
+
+            components.html(tradingview_html, height=520)
+
+            st.info("💡 **Astuce:** Utilisez les outils TradingView pour analyser en détail la performance des indices. Vous pouvez ajouter vos propres symboles directement dans le widget.")
+
+        # === STATISTIQUES DÉTAILLÉES ===
+        st.markdown("---")
+        st.markdown("#### 📈 Statistiques détaillées")
+
+        # Calculer les statistiques
+        stats_data = []
+
+        # Stats portefeuille
+        port_returns = portfolio_perf['portfolio_return'].pct_change().dropna() * 100
+        stats_data.append({
+            "Actif": "🎯 Mon Portefeuille",
+            "Rendement Total": f"{portfolio_return:+.2f}%",
+            "Volatilité": f"{port_returns.std():.2f}%" if len(port_returns) > 1 else "N/A",
+            "Max": f"{portfolio_perf['portfolio_return'].max():+.2f}%",
+            "Min": f"{portfolio_perf['portfolio_return'].min():+.2f}%",
+            "Sharpe (approx)": f"{(portfolio_return / (port_returns.std() * np.sqrt(252))):.2f}" if len(port_returns) > 1 and port_returns.std() > 0 else "N/A"
+        })
+
+        # Stats benchmarks
+        for bench_name, bench_df in benchmark_data.items():
+            bench_return = bench_df['return'].iloc[-1]
+            bench_returns = bench_df['return'].pct_change().dropna() * 100
+            stats_data.append({
+                "Actif": f"📈 {bench_name}",
+                "Rendement Total": f"{bench_return:+.2f}%",
+                "Volatilité": f"{bench_returns.std():.2f}%" if len(bench_returns) > 1 else "N/A",
+                "Max": f"{bench_df['return'].max():+.2f}%",
+                "Min": f"{bench_df['return'].min():+.2f}%",
+                "Sharpe (approx)": f"{(bench_return / (bench_returns.std() * np.sqrt(252))):.2f}" if len(bench_returns) > 1 and bench_returns.std() > 0 else "N/A"
+            })
+
+        stats_df = pd.DataFrame(stats_data)
+        st.dataframe(stats_df, use_container_width=True, hide_index=True)
 
     else:
         st.warning("""
-        📊 **Pas encore d'historique de performance**
+        ⚠️ **Impossible de calculer la performance historique**
 
-        L'historique sera enregistré automatiquement à chaque actualisation des cours.
-        Cliquez sur **🔄 Actualiser les cours** pour commencer à suivre la performance.
+        Cela peut arriver si :
+        - Les données de marché ne sont pas disponibles
+        - La période sélectionnée est trop courte
+        - Les symboles de vos positions ne sont pas reconnus
+
+        Essayez de sélectionner une période plus longue ou vérifiez vos positions.
         """)
 
-        # Afficher les données actuelles comme point de départ
+        # Afficher les données actuelles
         st.markdown("#### 📍 Situation Actuelle")
 
         col1, col2, col3 = st.columns(3)
@@ -1014,7 +1323,13 @@ def render_performance_history_tab(portfolio: Portfolio):
         with col2:
             st.metric("Capital Investi", f"{portfolio.total_invested:,.2f} €")
         with col3:
-            st.metric("P/L Actuel", f"{portfolio.total_profit_loss:+,.2f} € ({portfolio.total_profit_loss_percent:+.2f}%)")
+            color = "normal" if portfolio.total_profit_loss >= 0 else "inverse"
+            st.metric(
+                "P/L Actuel",
+                f"{portfolio.total_profit_loss:+,.2f} €",
+                delta=f"{portfolio.total_profit_loss_percent:+.2f}%",
+                delta_color=color
+            )
 
 
 # ==============================================================================
