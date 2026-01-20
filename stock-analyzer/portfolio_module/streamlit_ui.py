@@ -57,6 +57,37 @@ def auto_load_portfolio() -> Optional[Portfolio]:
             print(f"Erreur chargement auto: {e}")
     return None
 
+
+def portfolio_to_dict(portfolio: Portfolio) -> Dict[str, Any]:
+    """Convertit un Portfolio en dictionnaire pour l'export JSON."""
+    return {
+        "name": portfolio.name,
+        "positions": [
+            {
+                "symbol": p.symbol,
+                "name": p.name,
+                "isin": p.isin,
+                "quantity": p.quantity,
+                "average_buy_price": p.average_buy_price,
+                "current_price": p.current_price,
+                "currency": p.currency,
+                "asset_type": p.asset_type,
+                "sector": p.sector,
+                "country": p.country,
+                "region": p.region
+            }
+            for p in portfolio.positions
+        ],
+        "cash_balance": portfolio.cash_balance,
+        "creation_date": portfolio.creation_date.isoformat() if portfolio.creation_date else None,
+        "historical_values": portfolio.historical_values,
+        "export_date": datetime.now().isoformat(),
+        "total_value": portfolio.total_value,
+        "total_invested": portfolio.total_invested,
+        "total_profit_loss": portfolio.total_profit_loss,
+        "total_profit_loss_percent": portfolio.total_profit_loss_percent
+    }
+
 # ==============================================================================
 # SESSION STATE INITIALIZATION
 # ==============================================================================
@@ -364,10 +395,15 @@ def render_portfolio_dashboard():
                 auto_save_portfolio(portfolio)
                 st.rerun()
     with col3:
-        if st.button("💾 Exporter JSON"):
-            client = st.session_state.portfolio_client
-            client.save_portfolio("portfolio_export.json", portfolio)
-            st.success("Exporté vers portfolio_export.json!")
+        # Bouton de téléchargement direct du portefeuille
+        portfolio_json = json.dumps(portfolio_to_dict(portfolio), indent=2, ensure_ascii=False, default=str)
+        st.download_button(
+            label="💾 Télécharger",
+            data=portfolio_json,
+            file_name=f"portefeuille_{datetime.now().strftime('%Y%m%d_%H%M')}.json",
+            mime="application/json",
+            help="Téléchargez votre portefeuille pour le partager"
+        )
     with col4:
         if st.button("🗑️ Réinitialiser"):
             if os.path.exists(PORTFOLIO_AUTO_SAVE_PATH):
