@@ -14,7 +14,7 @@ Caracteristiques:
 import MetaTrader5 as mt5
 import pandas as pd
 import numpy as np
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from dataclasses import dataclass
 from typing import Optional, Tuple
 from enum import Enum
@@ -68,6 +68,7 @@ class ScalpingConfig:
     # Horaires de trading (heures UTC)
     trading_hours_start: int = 7       # 7h UTC (ouverture Londres)
     trading_hours_end: int = 16        # 16h UTC (fin overlap NY)
+    allow_24h_trading: bool = False    # True = ignore les horaires
 
     # Indicateurs
     ema_fast: int = 5
@@ -242,13 +243,17 @@ class SignalGenerator:
 
     def check_trading_hours(self) -> bool:
         """Verifie si on est dans les heures de trading"""
-        now = datetime.utcnow()
-        hour = now.hour
+        now = datetime.now(timezone.utc)
 
         # Eviter le weekend
         if now.weekday() >= 5:  # Samedi = 5, Dimanche = 6
             return False
 
+        # Mode 24h: ignore les horaires
+        if self.config.allow_24h_trading:
+            return True
+
+        hour = now.hour
         return self.config.trading_hours_start <= hour < self.config.trading_hours_end
 
     def check_spread(self, symbol_info) -> Tuple[bool, float]:
@@ -697,15 +702,6 @@ def main():
     print("Trades de 30 secondes a 3 minutes")
     print("="*60)
 
-    # Configuration personnalisable
-    config = ScalpingConfig(
-        take_profit_pips=8.0,
-        stop_loss_pips=5.0,
-        risk_percent=1.0,
-        max_trades_per_day=20,
-        max_spread_pips=1.5,
-    )
-
     # Connexion MT5
     mt5_path = r"C:\Program Files\XM MT5\terminal64.exe"
 
@@ -713,6 +709,20 @@ def main():
     login = input("Login: ")
     password = input("Password: ")
     server = input("Serveur: ")
+
+    # Options de configuration
+    print("\n--- Options ---")
+    mode_24h = input("Activer trading 24h? (o/N): ").lower() == 'o'
+
+    # Configuration personnalisable
+    config = ScalpingConfig(
+        take_profit_pips=8.0,
+        stop_loss_pips=5.0,
+        risk_percent=1.0,
+        max_trades_per_day=20,
+        max_spread_pips=1.5,
+        allow_24h_trading=mode_24h,
+    )
 
     robot = ScalpingRobot(config)
 
@@ -725,7 +735,14 @@ def main():
     print(f"Stop Loss: {config.stop_loss_pips} pips")
     print(f"Risque par trade: {config.risk_percent}%")
     print(f"Max trades/jour: {config.max_trades_per_day}")
-    print(f"Horaires: {config.trading_hours_start}h - {config.trading_hours_end}h UTC")
+    if config.allow_24h_trading:
+        print("Horaires: 24h/24 (mode actif)")
+    else:
+        print(f"Horaires: {config.trading_hours_start}h - {config.trading_hours_end}h UTC")
+
+    # Affiche l'heure actuelle UTC
+    now_utc = datetime.now(timezone.utc)
+    print(f"\nHeure UTC actuelle: {now_utc.strftime('%H:%M:%S')}")
 
     print("\nAppuyez sur Ctrl+C pour arreter le robot")
     print("="*60)
